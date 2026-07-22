@@ -1,0 +1,11 @@
+{
+  "click_delay": 0.5,
+  "retry_times": 3,
+  "image_threshold": 0.8,
+  "default_x": 100,
+  "default_y": 100,
+  "派出兵力": 1,
+  "搜索点坐标X": "3222@3260@3264@3255",
+  "搜索点坐标Y": "3495@3500@3535@3555",
+  "task_queue": []
+}
