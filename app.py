@@ -7,6 +7,7 @@ import os
 import re
 import json
 import sys
+import urllib.request
 from PIL import Image, ImageGrab
 
 class SettingsManager:
@@ -15,6 +16,7 @@ class SettingsManager:
     def __init__(self):
         self.settings_file = "adb_settings.json"
         self.settings = {}
+        
         self.load_settings()
     
     def load_settings(self):
@@ -89,30 +91,36 @@ class TaskManager:
         self.thread = None
         self.current_task_index = -1
         self.current_task_remaining = 0
-        
-    def set_task_queue(self, task_queue):
-        """设置任务队列"""
-        self.task_queue = task_queue.copy()
-        
+        self.loop_count = 0  # 当前循环次数
+        self.max_loops = -1  # -1表示无限循环
+    
+    def set_max_loops(self, max_loops):
+        """设置最大循环次数，-1表示无限循环"""
+        self.max_loops = max_loops
+    
     def add_task(self, task_name, times=1, interval=1.0):
         """添加任务到队列末尾"""
         self.task_queue.append([task_name, times, interval])
-        
-    def insert_task(self, index, task_name, times=1, interval=1.0):
-        """在指定位置插入任务"""
-        self.task_queue.insert(index, [task_name, times, interval])
-        
+    
     def remove_task(self, index):
         """移除指定位置的任务"""
         if 0 <= index < len(self.task_queue):
             del self.task_queue[index]
             return True
         return False
-        
+    
     def clear_tasks(self):
         """清空任务队列"""
         self.task_queue.clear()
-        
+    
+    def set_task_queue(self, task_queue):
+        """设置任务队列"""
+        self.task_queue = task_queue.copy()
+    
+    def insert_task(self, index, task_name, times=1, interval=1.0):
+        """在指定位置插入任务"""
+        self.task_queue.insert(index, [task_name, times, interval])
+    
     def get_task_count(self):
         """获取任务数量"""
         return len(self.task_queue)
@@ -143,68 +151,99 @@ class TaskManager:
         """停止任务执行"""
         if not self.is_running:
             return
+        self.is_running = False
         self.app.log_message("正在停止任务...", "info")
         self.stop_event.set()
     
     def _task_loop(self):
-        """任务执行主循环"""
+        """任务执行主循环 - 循环执行直到停止或达到循环次数"""
         total_tasks = len(self.task_queue)
-        task_index = 0
         
-        while not self.stop_event.is_set() and task_index < total_tasks:
-            # 获取当前任务
-            task_info = self.task_queue[task_index]
-            task_name = task_info[0]
-            times = task_info[1]
-            interval = task_info[2] if len(task_info) > 2 else 1.0
+        # 检查任务队列是否为空
+        if total_tasks == 0:
+            self.app.root.after(0, self._on_finished)
+            return
+        
+        self.loop_count = 0
+        
+        # 循环执行，直到收到停止信号或达到最大循环次数
+        while not self.stop_event.is_set():
+            # 检查是否达到最大循环次数（-1表示无限循环）
+            if self.max_loops != -1 and self.loop_count >= self.max_loops:
+                self.app.log_message(f"✅ 已达到最大循环次数 ({self.max_loops})，停止执行", "info")
+                break  # 退出循环
             
-            # 更新状态
-            self.current_task_index = task_index
-            self.current_task_remaining = times
+            self.loop_count += 1
+            if self.max_loops != -1:
+                self.app.log_message(f"🔄 开始第 {self.loop_count}/{self.max_loops} 轮执行", "info")
+            else:
+                self.app.log_message(f"🔄 开始第 {self.loop_count} 轮执行 (无限循环)", "info")
             
-            self.app.root.after(0, lambda: self.app.update_task_status(
-                f"执行中: {task_name} ({times}次) [{task_index+1}/{total_tasks}]", 
-                "orange"
-            ))
-            self.app.log_message(f"开始执行任务 [{task_index+1}/{total_tasks}]: {task_name} (共{times}次)", "info")
-            
-            # 执行当前任务指定次数
-            for i in range(times):
+            # 遍历任务队列
+            for task_index in range(total_tasks):
+                # 检查是否收到停止信号
                 if self.stop_event.is_set():
                     break
                 
-                self.current_task_remaining = times - i - 1
-                self.app.root.after(0, lambda n=task_name, c=i+1, t=times: 
-                    self.app.update_task_status(
-                        f"执行中: {n} [{c}/{t}]", 
-                        "orange"
-                    ))
+                # 获取当前任务
+                task_info = self.task_queue[task_index]
+                task_name = task_info[0]
+                times = task_info[1]
+                interval = task_info[2] if len(task_info) > 2 else 1.0
                 
-                try:
-                    # 执行任务函数 - 从app中获取方法
-                    if hasattr(self.app, task_name):
-                        func = getattr(self.app, task_name)
-                        func()
-                        self.app.log_message(f"✓ {task_name} 第 {i+1}/{times} 次执行完成", "info")
-                    else:
-                        self.app.log_message(f"❌ 任务函数 {task_name} 不存在", "error")
+                # 更新状态
+                self.current_task_index = task_index
+                self.current_task_remaining = times
+                
+                loop_info = f" (第{self.loop_count}轮)" if self.max_loops != -1 else " (循环)"
+                self.app.root.after(0, lambda: self.app.update_task_status(
+                    f"执行中: {task_name}{loop_info} [{task_index+1}/{total_tasks}]", 
+                    "orange"
+                ))
+                self.app.log_message(f"执行任务 [{task_index+1}/{total_tasks}]: {task_name} (共{times}次)", "info")
+                
+                # 执行当前任务指定次数
+                for i in range(times):
+                    if self.stop_event.is_set():
                         break
-                except Exception as e:
-                    self.app.log_message(f"❌ 任务 {task_name} 执行失败: {e}", "error")
+                    
+                    self.current_task_remaining = times - i - 1
+                    self.app.root.after(0, lambda n=task_name, c=i+1, t=times, loop=self.loop_count: 
+                        self.app.update_task_status(
+                            f"循环第{loop}轮: {n} [{c}/{t}]", 
+                            "orange"
+                        ))
+                    
+                    try:
+                        # 执行任务函数
+                        if hasattr(self.app, task_name):
+                            func = getattr(self.app, task_name)
+                            func()
+                            self.app.log_message(f"✓ {task_name} 第 {i+1}/{times} 次执行完成", "info")
+                        else:
+                            self.app.log_message(f"❌ 任务函数 {task_name} 不存在", "error")
+                            break
+                    except Exception as e:
+                        self.app.log_message(f"❌ 任务 {task_name} 执行失败: {e}", "error")
+                    
+                    # 任务间间隔（除了最后一次）
+                    if i < times - 1 and not self.stop_event.is_set():
+                        time.sleep(interval)
                 
-                # 任务间间隔（除了最后一次）
-                if i < times - 1 and not self.stop_event.is_set():
-                    time.sleep(interval)
-            
-            # 任务完成后短暂间隔
-            if not self.stop_event.is_set():
-                task_index += 1
-                if task_index < total_tasks:
+                # 任务完成后短暂间隔
+                if not self.stop_event.is_set():
                     time.sleep(0.5)
+            
+            # 一轮任务完成
+            if not self.stop_event.is_set():
+                if self.max_loops == -1 or self.loop_count < self.max_loops:
+                    self.app.log_message("🔄 本轮任务完成，继续下一轮...", "info")
+                    time.sleep(1)  # 轮间间隔
         
-        # 任务结束
+        # ===== 关键修改：退出循环后调用 _on_finished =====
+        # 无论是因为达到最大循环次数还是被停止，都需要恢复按钮状态
         self.app.root.after(0, self._on_finished)
-    
+                
     def _on_finished(self):
         """任务完成回调"""
         self.is_running = False
@@ -226,12 +265,17 @@ class TaskManager:
 class ADBGUI:
     def __init__(self, root):
         self.root = root
+        self.image_cache = {}  # 缓存字典: {image_path: (x, y)}
         self.root.title("ADB 模拟器自动化控制")
-        self.root.geometry("1200x750")
+        self.root.geometry("1150x750")
         self.root.resizable(True, True)
         
         # 初始化设置管理器
         self.settings_mgr = SettingsManager()
+
+        # 初始化 ADB 路径
+        self.adb_path = self.get_adb_path()
+        self.log_message(f"ADB 路径: {self.adb_path}", "info")
         
         # 初始化功能相关变量
         self.function_instances = None
@@ -258,7 +302,40 @@ class ADBGUI:
         
         # 加载保存的任务队列
         self.load_task_queue_from_settings()
-    
+    def get_adb_path(self):
+        """
+        获取 ADB 可执行文件路径
+        优先从当前目录的 platform-tools 文件夹查找
+        如果找不到则使用系统 PATH 中的 adb
+        """
+        # 获取当前 exe 所在目录（或脚本所在目录）
+        if getattr(sys, 'frozen', False):
+            # 打包成 exe 后运行
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # 作为脚本运行
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+        
+        # 检查 platform-tools 目录下的 adb
+        platform_tools_adb = os.path.join(base_dir, 'platform-tools', 'adb')
+        if sys.platform == 'win32':
+            platform_tools_adb += '.exe'
+        
+        if os.path.exists(platform_tools_adb) and os.access(platform_tools_adb, os.X_OK):
+            self.log_message(f"使用本地 ADB: {platform_tools_adb}", "info")
+            return platform_tools_adb
+        
+        # 检查当前目录下的 adb
+        local_adb = os.path.join(base_dir, 'adb')
+        if sys.platform == 'win32':
+            local_adb += '.exe'
+        if os.path.exists(local_adb) and os.access(local_adb, os.X_OK):
+            self.log_message(f"使用本地 ADB: {local_adb}", "info")
+            return local_adb
+        
+        # 如果本地没有，使用系统 PATH 中的 adb
+        self.log_message("使用系统 PATH 中的 ADB", "info")
+        return 'adb'
     def load_functions_module(self):
         """加载外部功能模块"""
         try:
@@ -310,17 +387,7 @@ class ADBGUI:
     def load_builtin_functions(self):
         """加载内置功能（作为后备）"""
         self.function_configs = {
-            "城墙": {"color": "#4CAF50", "desc": "执行城墙任务"},
-            "战令活动": {"color": "#FF9800", "desc": "执行战令活动任务"},
-            "挂机奖励": {"color": "#2196F3", "desc": "执行挂机奖励任务"},
-            "征兵任务": {"color": "#4CAF50", "desc": "执行征兵任务"},
-            "采集金矿": {"color": "#FF9800", "desc": "执行采集金矿任务"},
-            "采集农田": {"color": "#FF9800", "desc": "执行采集农田任务"},
-            "采集伐木场": {"color": "#FF9800", "desc": "执行采集伐木场任务"},
-            "采集水晶矿": {"color": "#FF9800", "desc": "执行采集水晶矿任务"},
-            "集结泰坦": {"color": "#FF9800", "desc": "执行集结泰坦任务"},
-            "集结哈罗德": {"color": "#FF9800", "desc": "执行集结哈罗德任务"},
-            "搜索任务": {"color": "#4CAF50", "desc": "执行搜索任务"},
+            "测试消息": {"color": "#4CAF50", "desc": "执行城墙任务"},
         }
         
         # 定义内置功能方法
@@ -329,324 +396,13 @@ class ADBGUI:
     
     def _define_builtin_functions(self):
         """定义内置功能方法"""
-        # 城墙
-        def 城墙():
-            color = self.get_color(110, 1251)
-            if color and color.lower() != '42AAE7':
-                self.log_message("进入城堡页面", "info")
-                self.click_point(110, 1251)
-                time.sleep(2)
-            
-            self.log_message("进入城墙界面", "info")
-            self.click_point(364, 904)
-            time.sleep(2)
-            
-            retry_times = self.settings_mgr.get_value("retry_times", 3)
-            for i in range(retry_times):
-                if self.get_color(300, 1180) == '4282C6':
-                    break
-                self.log_message(f"等待城堡页面加载... (尝试 {i+1}/{retry_times})", "info")
-                time.sleep(1)
-            
-            self.log_message("领取收益", "info")    
-            self.click_point(580, 1210)
-            time.sleep(2) 
-            self.click_point(357, 1153)
-            time.sleep(2)
-            self.log_message("一键驻防", "info")    
-            self.click_point(300, 1180)
-            time.sleep(2)
-            self.click_point(53, 157)
-        setattr(self, "城墙", 城墙)
-        
-        # 战令活动
-        def 战令活动():
-            time.sleep(2)
-            self.click_point(673, 596)
-            time.sleep(3)
-            
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("1.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到图片位置: {pos}", "info")
-                self.click_point(pos[0] - 100, pos[1])
-                time.sleep(2)
-                self.click_point(pos[0] - 100, pos[1])
-            else:
-                self.log_message("未找到图片", "info")
-            time.sleep(2)
-            self.click_point(45, 72)
-        setattr(self, "战令活动", 战令活动)
-        
-        # 挂机奖励
-        def 挂机奖励():
-            time.sleep(2)
-            self.click_point(420, 1237)
-            time.sleep(4)
-            self.click_point(205, 844)
-            time.sleep(2)
-            self.click_point(538, 866)
-            time.sleep(2)
-            self.click_point(368, 744)
-            
-            time.sleep(3)
-            self.click_point(205, 844)
-            time.sleep(2)
-            
-            max_retries = self.settings_mgr.get_value("retry_times", 3)
-            retry_count = 0
-            while self.get_color(382, 873).startswith('42') and retry_count < max_retries:
-                self.log_message("可以进行扫荡...", "info")
-                self.click_point(382, 873)
-                time.sleep(4)
-                retry_count += 1
-            
-            while self.get_color(218, 655) == '5ACF39':
-                self.log_message("尝试看广告...", "info")
-                self.click_point(218, 655)
-                time.sleep(1)
-                if self.get_color(365, 681) != 'DEEBF7':
-                    self.click_point(365, 681)
-                else:
-                    self.log_message("看不了广告了 下一步...", "info")
-                    break
-            
-            self.click_point(671, 293)
-            time.sleep(3)
-            self.log_message("看广告...", "info")
-            
-            while self.get_color(189, 441) == 'DEEBF7':
-                self.click_point(174, 872)
-                time.sleep(1)
-            self.log_message("返回主页面...", "info")
-            self.click_point(671, 293)
-        setattr(self, "挂机奖励", 挂机奖励)
-        
-        # 征兵任务
-        def 征兵任务():
-            time.sleep(1)
-            self.click_point(66, 1236)
-            time.sleep(2)
-            self.click_point(208, 489)
-            time.sleep(1)
-            self.click_point(137, 205)
-            
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("zhengbing.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到征兵按钮: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-            
-            time.sleep(2)
-            self.click_point(52, 109)
-        setattr(self, "征兵任务", 征兵任务)
-        
-        # 采集函数
-        def 采集金矿():
-            self._采集(150)
-        setattr(self, "采集金矿", 采集金矿)
-        
-        def 采集农田():
-            self._采集(300)
-        setattr(self, "采集农田", 采集农田)
-        
-        def 采集伐木场():
-            self._采集(450)
-        setattr(self, "采集伐木场", 采集伐木场)
-        
-        def 采集水晶矿():
-            self._采集(600)
-        setattr(self, "采集水晶矿", 采集水晶矿)
-        
-        def _采集(xPoint):
-            if self.get_color(700, 1225) != 'FFCB4A':
-                self.click_point(700, 1225)
-                time.sleep(4)
-            self.click_point(700, 1225)
-            time.sleep(1)
-            self.click_point(277, 381)
-            time.sleep(1)
-            self.click_point(xPoint, 550)
-            time.sleep(1)
-            self.click_point(370, 920)
-            time.sleep(4)
-            self.click_point(357, 615)
-            time.sleep(3)
-            
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("6.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到采集按钮: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-                time.sleep(2)
-                if self.设置出兵数量():
-                    self.log_message(f"设置出兵量成功!", "info")
-                    pos = self.find_image("2.png", threshold=threshold)
-                    if pos:
-                        self.log_message(f"找到出发位置: {pos}", "info")
-                        self.click_point(pos[0], pos[1])
-        setattr(self, "_采集", _采集)
-        
-        # 集结泰坦
-        def 集结泰坦():
-            if self.get_color(700, 1225) != 'FFCB4A':
-                self.click_point(700, 1225)
-                time.sleep(4)
-            self.click_point(700, 1225)
-            time.sleep(1)
-            self.click_point(443, 383)
-            time.sleep(1)
-            self.click_point(435, 920)
-            time.sleep(2)
-            
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("7.png", threshold=threshold)
-            if pos is None:
-                pos = self.find_image("5.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到集结按钮: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-                time.sleep(3)
-                if self.设置出兵数量():
-                    self.log_message(f"设置出兵量成功!", "info")
-                    pos = self.find_image("2.png", threshold=threshold)
-                    if pos:
-                        self.log_message(f"找到出发位置: {pos}", "info")
-                        self.click_point(pos[0], pos[1])
-        setattr(self, "集结泰坦", 集结泰坦)
-        
-        # 集结哈罗德
-        def 集结哈罗德():
-            if self.get_color(700, 1225) != 'FFCB4A':
-                self.click_point(700, 1225)
-                time.sleep(4)
-            self.click_point(700, 1225)
-            time.sleep(1)
-            self.click_point(604, 383)
-            time.sleep(1)
-            self.click_point(435, 920)
-            time.sleep(2)
-            
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("7.png", threshold=threshold)
-            if pos is None:
-                pos = self.find_image("5.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到集结按钮: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-                time.sleep(3)
-                if self.设置出兵数量():
-                    self.log_message(f"设置出兵量成功!", "info")
-                    pos = self.find_image("2.png", threshold=threshold)
-                    if pos:
-                        self.log_message(f"找到出发位置: {pos}", "info")
-                        self.click_point(pos[0], pos[1])
-        setattr(self, "集结哈罗德", 集结哈罗德)
-        
-        # 搜索任务
-        def 搜索任务():
-            列表搜索点坐标X = self.settings_mgr.get_value("搜索点坐标X", "").split('@')
-            列表搜索点坐标Y = self.settings_mgr.get_value("搜索点坐标Y", "").split('@')
-            
-            for i in range(len(列表搜索点坐标X)):
-                搜索点坐标X = 列表搜索点坐标X[i]
-                搜索点坐标Y = 列表搜索点坐标Y[i]
-                
-                if self.get_color(700, 1225) != 'FFCB4A':
-                    self.click_point(700, 1225)
-                    time.sleep(2)
-                
-                self.click_point(120, 195)
-                time.sleep(1)
-                self.click_point(235, 584)
-                time.sleep(1)
-                self.input_number_with_backspace(搜索点坐标X, 4)
-                time.sleep(1)
-                self.click_point(635, 1218)
-                time.sleep(1)
-                self.click_point(518, 584)
-                time.sleep(1)
-                self.input_number_with_backspace(搜索点坐标Y, 4)
-                time.sleep(1)
-                self.click_point(366, 684)
-                time.sleep(3)
-                self.click_point(379, 646)
-                time.sleep(1)
-                
-                threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-                pos = self.find_image("4.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"防御位置: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-                if pos is None:
-                    pos = self.find_image("5.png", threshold=threshold)
-                    if pos:
-                        self.log_message(f"发起集结: {pos}", "info")
-                        self.click_point(pos[0], pos[1])
-                if pos is None:
-                    pos = self.find_image("6.png", threshold=threshold)
-                    if pos:
-                        self.log_message(f"发起采集: {pos}", "info")
-                        self.click_point(pos[0], pos[1])
-                
-                if pos is None:
-                    self.log_message(f"找不到对应的操作", "info")
-                    self.关闭弹窗()
-                    continue
-                
-                time.sleep(1)
-                self.click_point(227, 486)
-                time.sleep(2)
-                
-                pos = self.find_image("3.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"找到设置位置: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-                    time.sleep(1)
-                    self.click_point(610, 605)
-                    time.sleep(1)
-                    self.input_number_with_backspace(self.settings_mgr.get_value("派出兵力", "1"), 7)
-                    time.sleep(1)
-                    self.click_point(635, 1218)
-                    time.sleep(1)
-                    self.click_point(515, 1208)
-                    time.sleep(1)
-                    pos = self.find_image("2.png", threshold=threshold)
-                    if pos:
-                        self.log_message(f"找到出发按钮: {pos}", "info")
-                        self.click_point(pos[0], pos[1])
-                else:
-                    self.log_message(f"没有找到设置位置!", "error")
-                time.sleep(10)
-        setattr(self, "搜索任务", 搜索任务)
-        
-        # 辅助函数
-        def 关闭弹窗():
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("close.png", threshold=threshold)
-            if pos:
-                self.log_message(f"关闭弹窗: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-        setattr(self, "关闭弹窗", 关闭弹窗)
-        
-        def 设置出兵数量():
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("3.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到设置位置: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-                time.sleep(1)
-                self.click_point(610, 605)
-                time.sleep(1)
-                self.input_number_with_backspace(self.settings_mgr.get_value("派出兵力", "1"), 7)
-                time.sleep(1)
-                self.click_point(635, 1218)
-                time.sleep(1)
-                self.click_point(515, 1208)
-                time.sleep(1)
-                return True
-            return False
-        setattr(self, "设置出兵数量", 设置出兵数量)
+        # 测试消息
+        def 测试消息():
+            self.log_message("测试消息", "info")    
+        setattr(self, "测试消息", 测试消息)
+      
+
+
     
     def reload_functions(self):
         """重新加载外部功能模块（支持热更新）"""
@@ -705,7 +461,7 @@ class ADBGUI:
         refresh_btn.pack(pady=5)
         
         # 添加重新加载功能按钮
-        reload_btn = ttk.Button(left_frame, text="🔄 重载功能", 
+        reload_btn = ttk.Button(left_frame, text="重载功能", 
                                 command=self.reload_functions)
         reload_btn.pack(pady=2)
         
@@ -811,10 +567,8 @@ class ADBGUI:
         self.task_interval_entry.insert(0, "1.0")
         self.task_interval_entry.pack(fill=tk.X, pady=(0, 10))
         
-        ttk.Button(operation_frame, text="➕ 添加到队列", 
-                   command=self.add_task_to_queue, width=18).pack(pady=5)
-        ttk.Button(operation_frame, text="📋 从快捷功能导入", 
-                   command=self.import_from_quick_functions, width=18).pack(pady=5)
+        ttk.Button(operation_frame, text="添加到队列", 
+                command=self.add_task_to_queue, width=18).pack(pady=5)
         
         # 下半部分：任务控制
         bottom_half = ttk.Frame(task_main_frame)
@@ -823,28 +577,42 @@ class ADBGUI:
         control_frame = ttk.LabelFrame(bottom_half, text="任务控制", padding=10)
         control_frame.pack(fill=tk.X)
         
-        btn_frame = ttk.Frame(control_frame)
-        btn_frame.pack(fill=tk.X, pady=5)
+        # 第一行：控制按钮 + 循环控制（并排）
+        control_row1 = ttk.Frame(control_frame)
+        control_row1.pack(fill=tk.X, pady=5)
         
-        self.start_btn = ttk.Button(btn_frame, text="▶ 启动任务队列", 
-                                    command=self.start_task_queue, width=15)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
+        # 控制按钮组
+        btn_frame = ttk.Frame(control_row1)
+        btn_frame.pack(side=tk.LEFT, padx=(0, 20))
         
-        self.stop_btn = ttk.Button(btn_frame, text="⏹ 停止任务", 
-                                   command=self.stop_task_queue, width=15, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
+        self.start_btn = ttk.Button(btn_frame, text="启动任务", 
+                                    command=self.start_task_queue, width=20)
+        self.start_btn.pack(side=tk.LEFT, padx=2)
         
-        ttk.Button(btn_frame, text="🗑 清空队列", 
-                   command=self.clear_tasks, width=15).pack(side=tk.LEFT, padx=5)
+        self.stop_btn = ttk.Button(btn_frame, text="停止任务", 
+                                command=self.stop_task_queue, width=15, state=tk.DISABLED)
+        self.stop_btn.pack(side=tk.LEFT, padx=2)
         
-        # 状态显示
-        self.task_status_label = ttk.Label(control_frame, text="状态: 空闲", foreground="green")
-        self.task_status_label.pack(pady=5)
+        ttk.Button(btn_frame, text="清空队列", 
+                command=self.clear_tasks, width=15).pack(side=tk.LEFT, padx=2)
         
-        # 进度信息
-        self.task_progress_label = ttk.Label(control_frame, text="", foreground="blue")
-        self.task_progress_label.pack()
-    
+        # 循环控制选项（与按钮并排）
+        loop_frame = ttk.Frame(control_row1)
+        loop_frame.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        
+        ttk.Label(loop_frame, text="循环次数:").pack(side=tk.LEFT, padx=5)
+        self.loop_times_entry = ttk.Entry(loop_frame, width=8)
+        self.loop_times_entry.insert(0, "1")  # -1表示无限循环
+        self.loop_times_entry.pack(side=tk.LEFT, padx=2)
+        ttk.Label(loop_frame, text="(-1无限)", font=('Arial', 9)).pack(side=tk.LEFT, padx=2)
+        
+        # 第二行：状态显示
+        status_frame = ttk.Frame(control_frame)
+        status_frame.pack(fill=tk.X, pady=5)
+        
+        self.task_status_label = ttk.Label(status_frame, text="状态: 空闲", foreground="green")
+        self.task_status_label.pack(side=tk.LEFT, padx=5)
+        
     def update_task_combo(self):
         """更新任务下拉列表"""
         tasks = list(self.function_configs.keys())
@@ -894,80 +662,6 @@ class ADBGUI:
         # 自动保存任务队列到设置
         self.save_task_queue_to_settings()
     
-    def import_from_quick_functions(self):
-        """从快捷功能导入选中的任务"""
-        # 打开一个对话框选择要导入的任务
-        dialog = tk.Toplevel(self.root)
-        dialog.title("导入任务")
-        dialog.geometry("400x400")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        ttk.Label(dialog, text="选择要导入的任务:", font=('Arial', 10, 'bold')).pack(pady=10)
-        
-        # 创建带滚动条的任务列表
-        list_frame = ttk.Frame(dialog)
-        list_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
-        
-        # 使用Listbox支持多选
-        listbox = tk.Listbox(list_frame, selectmode=tk.MULTIPLE, height=15)
-        scrollbar = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=listbox.yview)
-        listbox.configure(yscrollcommand=scrollbar.set)
-        
-        listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # 填充所有可用功能
-        for name in self.function_configs.keys():
-            listbox.insert(tk.END, name)
-        
-        # 参数输入
-        param_frame = ttk.Frame(dialog)
-        param_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Label(param_frame, text="执行次数:").pack(side=tk.LEFT, padx=5)
-        times_entry = ttk.Entry(param_frame, width=10)
-        times_entry.insert(0, "1")
-        times_entry.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(param_frame, text="间隔(秒):").pack(side=tk.LEFT, padx=5)
-        interval_entry = ttk.Entry(param_frame, width=10)
-        interval_entry.insert(0, "1.0")
-        interval_entry.pack(side=tk.LEFT, padx=5)
-        
-        def confirm_import():
-            selected = listbox.curselection()
-            if not selected:
-                messagebox.showwarning("警告", "请选择至少一个任务")
-                return
-            
-            try:
-                times = int(times_entry.get())
-                if times <= 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("错误", "请输入有效的执行次数")
-                return
-            
-            try:
-                interval = float(interval_entry.get())
-                if interval < 0:
-                    raise ValueError
-            except ValueError:
-                messagebox.showerror("错误", "请输入有效的间隔时间")
-                return
-            
-            # 添加选中的任务
-            for idx in selected:
-                task_name = listbox.get(idx)
-                self.task_manager.add_task(task_name, times, interval)
-            
-            self.refresh_task_list()
-            self.save_task_queue_to_settings()
-            self.log_message(f"已导入 {len(selected)} 个任务", "info")
-            dialog.destroy()
-        
-        ttk.Button(dialog, text="确认导入", command=confirm_import).pack(pady=10)
     
     def refresh_task_list(self):
         """刷新任务列表显示"""
@@ -1062,17 +756,24 @@ class ADBGUI:
         if self.task_manager.is_running:
             return
         
+        # 获取循环次数设置
+        try:
+            max_loops = int(self.loop_times_entry.get())
+            self.task_manager.set_max_loops(max_loops)
+        except ValueError:
+            self.task_manager.set_max_loops(-1)  # 默认无限循环
+        
         if self.task_manager.start():
             self.start_btn.config(state=tk.DISABLED)
             self.stop_btn.config(state=tk.NORMAL)
-            self.log_message("任务队列已启动", "info")
+            self.log_message(f"任务队列已启动 (循环次数: {'无限' if self.task_manager.max_loops == -1 else self.task_manager.max_loops})", "info")
     
     def stop_task_queue(self):
         """停止任务队列"""
         if not self.task_manager.is_running:
             return
         self.task_manager.stop()
-        self.start_btn.config(state=tk.DISABLED)
+        self.start_btn.config(state=tk.NORMAL)
         self.stop_btn.config(state=tk.DISABLED)
     
     def update_task_status(self, status_text, color="green"):
@@ -1114,7 +815,7 @@ class ADBGUI:
         
         row = 0
         col = 0
-        max_cols = 4
+        max_cols = 5
         
         for name, config in self.function_configs.items():
             btn_frame = ttk.LabelFrame(parent_frame, text=name, padding=10)
@@ -1122,7 +823,7 @@ class ADBGUI:
             
             btn = tk.Button(
                 btn_frame,
-                text=f"▶ {name}",
+                text=f"{name}",
                 font=('Arial', 12, 'bold'),
                 bg=config.get("color", "#E0E0E0"),
                 fg="white",
@@ -1132,10 +833,7 @@ class ADBGUI:
                 cursor="hand2"
             )
             btn.pack(fill=tk.X, pady=5)
-            
-            desc_label = ttk.Label(btn_frame, text=config.get("desc", ""), 
-                                font=('Arial', 9), foreground="gray")
-            desc_label.pack()
+
             
             status_label = ttk.Label(btn_frame, text="就绪", foreground="green", font=('Arial', 8))
             status_label.pack(pady=5)
@@ -1482,6 +1180,7 @@ class ADBGUI:
     
     def create_test_tab(self):
         """创建功能测试标签页"""
+        # 坐标测试部分（原有）
         coord_frame = ttk.LabelFrame(self.test_tab, text="坐标测试", padding=10)
         coord_frame.pack(fill=tk.X, pady=5, padx=5)
         
@@ -1505,33 +1204,103 @@ class ADBGUI:
         ttk.Button(btn_frame, text="点击", command=self.test_click, width=10).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="找图", command=self.test_find_image, width=10).pack(side=tk.LEFT, padx=2)
         ttk.Button(btn_frame, text="截图", command=self.test_screenshot, width=10).pack(side=tk.LEFT, padx=2)
+        
+        # ====== 新增：ADBKeyboard文字输入测试部分 ======
+        text_frame = ttk.LabelFrame(self.test_tab, text="ADBKeyboard文字输入测试", padding=10)
+        text_frame.pack(fill=tk.X, pady=5, padx=5)
+        
+        # 状态显示区域
+        status_display_frame = ttk.Frame(text_frame)
+        status_display_frame.pack(fill=tk.X, pady=5)
+        
+        self.adbkeyboard_status_label = ttk.Label(status_display_frame, text="检测ADBKeyboard状态...", foreground="blue")
+        self.adbkeyboard_status_label.pack(side=tk.LEFT, padx=5)
+        
+        # 修改这里：在"检测并激活"按钮左边添加"安装 ADBKeyboard"按钮
+        btn_container = ttk.Frame(status_display_frame)
+        btn_container.pack(side=tk.RIGHT, padx=5)
+        
+        # 新增：安装 ADBKeyboard 按钮
+        ttk.Button(btn_container, text="安装 ADBKeyboard", 
+                command=self.install_adbkeyboard, width=18).pack(side=tk.RIGHT, padx=2)
+        
+        # 原有的检测并激活按钮
+        ttk.Button(btn_container, text="检测并激活", 
+                command=self.check_and_activate_adbkeyboard, width=15).pack(side=tk.RIGHT, padx=2)
+        
+        # 输入文本区域
+        text_input_frame = ttk.Frame(text_frame)
+        text_input_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(text_input_frame, text="输入文本:").pack(side=tk.LEFT, padx=5)
+        self.test_text_entry = ttk.Entry(text_input_frame, width=50)
+        self.test_text_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        self.test_text_entry.insert(0, "你好世界 Hello World! 123 😊")
+        
+        # 按钮区域
+        text_btn_frame = ttk.Frame(text_frame)
+        text_btn_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Button(text_btn_frame, text="测试输入", 
+                command=self.test_adbkeyboard_input, width=12).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(text_btn_frame, text="使用说明", 
+                command=self.show_adbkeyboard_help, width=12).pack(side=tk.LEFT, padx=5)
+
     
-    def refresh_devices(self):
-        """刷新ADB设备列表"""
+    def refresh_devices(self, retry_count=2):
+        """刷新ADB设备列表（优先使用本地 platform-tools）"""
         self.device_listbox.delete(0, tk.END)
-        try:
-            result = subprocess.run(['adb', 'devices'], capture_output=True, text=True, timeout=5)
-            lines = result.stdout.strip().split('\n')
-            devices = []
-            for line in lines[1:]:
-                if line.strip() and 'device' in line and 'offline' not in line:
-                    parts = line.split()
-                    if len(parts) >= 2 and parts[1] == 'device':
-                        serial = parts[0]
-                        devices.append(serial)
-                        self.device_listbox.insert(tk.END, serial)
-            if not devices:
-                self.device_listbox.insert(tk.END, "没有已连接的设备")
-                self.selected_device.set("")
-                self.selected_device_label.config(text="未选择")
-            else:
-                self.device_listbox.selection_set(0)
-                self.on_device_select(None)
+        
+        # 获取 ADB 路径
+        adb_path = self.get_adb_path()
+        self.log_message("ADB目录:" + adb_path, "info")
+        for attempt in range(retry_count + 1):
+            try:
+                # 第一次尝试时先启动 ADB 服务
+                if attempt == 0:
+                    self.log_message("正在启动 ADB 服务...", "info")
+                    subprocess.run([adb_path, 'start-server'], capture_output=True, timeout=10)
+                    time.sleep(0.5)
                 
-            self.log_message("设备列表已刷新", "info")
-        except Exception as e:
-            self.log_message(f"刷新设备列表失败: {e}", "error")
-            messagebox.showerror("错误", f"ADB命令执行失败: {e}")
+                result = subprocess.run([adb_path, 'devices'], capture_output=True, text=True, timeout=10)
+                
+                lines = result.stdout.strip().split('\n')
+                devices = []
+                for line in lines[1:]:
+                    if line.strip() and 'device' in line and 'offline' not in line:
+                        parts = line.split()
+                        if len(parts) >= 2 and parts[1] == 'device':
+                            serial = parts[0]
+                            devices.append(serial)
+                            self.device_listbox.insert(tk.END, serial)
+                
+                if not devices:
+                    self.device_listbox.insert(tk.END, "没有已连接的设备")
+                    self.selected_device.set("")
+                    self.selected_device_label.config(text="未选择")
+                else:
+                    self.device_listbox.selection_set(0)
+                    self.on_device_select(None)
+                
+                self.log_message(f"设备列表已刷新 (发现 {len(devices)} 个设备)", "info")
+                return
+                
+            except subprocess.TimeoutExpired:
+                if attempt < retry_count:
+                    self.log_message(f"刷新设备列表超时，第 {attempt + 1} 次重试...", "warning")
+                    time.sleep(1)
+                else:
+                    self.log_message("刷新设备列表超时，请检查ADB是否正常工作", "error")
+                    messagebox.showerror("错误", "ADB命令执行超时，请确保:\n1. ADB已正确安装\n2. 模拟器/设备已连接")
+                    
+            except Exception as e:
+                if attempt < retry_count:
+                    self.log_message(f"刷新设备列表失败，第 {attempt + 1} 次重试: {e}", "warning")
+                    time.sleep(1)
+                else:
+                    self.log_message(f"刷新设备列表失败: {e}", "error")
+                    messagebox.showerror("错误", f"ADB命令执行失败: {e}")
     
     def on_device_select(self, event):
         """选择设备事件"""
@@ -1578,11 +1347,11 @@ class ADBGUI:
         
         try:
             temp_file = "/sdcard/temp_screencap.png"
-            cmd = ['adb', '-s', device, 'shell', 'screencap', temp_file]
+            cmd = [self.adb_path, '-s', device, 'shell', 'screencap', temp_file]
             subprocess.run(cmd, capture_output=True, check=True, timeout=5)
             
             local_temp = "temp_screencap.png"
-            pull_cmd = ['adb', '-s', device, 'pull', temp_file, local_temp]
+            pull_cmd = [self.adb_path, '-s', device, 'pull', temp_file, local_temp]
             subprocess.run(pull_cmd, capture_output=True, check=True, timeout=5)
             
             img = Image.open(local_temp)
@@ -1590,13 +1359,114 @@ class ADBGUI:
             color_hex = f"{pixel[0]:02X}{pixel[1]:02X}{pixel[2]:02X}"
             
             os.remove(local_temp)
-            subprocess.run(['adb', '-s', device, 'shell', 'rm', temp_file], capture_output=True, timeout=3)
+            subprocess.run([self.adb_path, '-s', device, 'shell', 'rm', temp_file], capture_output=True, timeout=3)
             return color_hex
         except Exception as e:
             self.log_message(f"取色失败 ({x},{y}): {e}", "error")
             return None
-    
-    def find_image(self, image_path, device=None, threshold=None):
+    def press_back(self, device=None):
+        """按下手机返回按钮"""
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                return False
+        
+        try:
+            # KEYCODE_BACK = 4
+            cmd = [self.adb_path, '-s', device, 'shell', 'input', 'keyevent', '4']
+            subprocess.run(cmd, capture_output=True, check=True, timeout=5)
+            self.log_message("按下返回按钮", "info")
+            time.sleep(0.5)  # 添加短暂延迟
+            return True
+        except Exception as e:
+            self.log_message(f"返回操作失败: {e}", "error")
+            return False
+        
+    def find_image_first(self, image_path, device=None, threshold=None, use_cache=False):
+        """在模拟器屏幕上查找指定图片，返回从上到下、从左到右第一个匹配的位置
+        
+        Args:
+            image_path: 图片模板路径
+            device: 设备序列号，默认使用当前选中的设备
+            threshold: 匹配阈值，默认从设置中读取
+            use_cache: 是否使用缓存
+        
+        Returns:
+            (x, y): 匹配到的中心坐标，如果未找到则返回 None
+        """
+        if threshold is None:
+            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
+            
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                return None
+        
+        # 缓存检查
+        cache_key = (image_path, device, threshold, "first")
+        if use_cache and cache_key in self.image_cache:
+            return self.image_cache[cache_key]
+        
+        try:
+            local_screen = "temp_screen.png"
+            with open(local_screen, 'wb') as f:
+                cmd = [self.adb_path, '-s', device, 'exec-out', 'screencap', '-p']
+                subprocess.run(cmd, stdout=f, check=True, timeout=5)
+            
+            screen_img = Image.open(local_screen)
+            template_img = Image.open(image_path)
+            
+            try:
+                import cv2
+                import numpy as np
+                
+                screen_np = np.array(screen_img)
+                template_np = np.array(template_img)
+                
+                screen_gray = cv2.cvtColor(screen_np, cv2.COLOR_RGB2GRAY)
+                template_gray = cv2.cvtColor(template_np, cv2.COLOR_RGB2GRAY)
+                
+                result = cv2.matchTemplate(screen_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+                h, w = template_gray.shape
+                
+                # 找到所有超过阈值的匹配点
+                locations = np.where(result >= threshold)
+                
+                if len(locations[0]) == 0:
+                    os.remove(local_screen)
+                    return None
+                
+                # 收集所有匹配点
+                matches = []
+                for pt in zip(*locations[::-1]):  # 注意：np.where返回的是(y,x)顺序
+                    x = pt[0] + w // 2
+                    y = pt[1] + h // 2
+                    confidence = result[pt[1], pt[0]]
+                    matches.append((x, y, confidence))
+                
+                # 按 y 坐标排序（从上到下），如果 y 相同则按 x 排序（从左到右）
+                matches.sort(key=lambda m: (m[1], m[0]))
+                
+                # 取第一个匹配点（最左上）
+                x, y, _ = matches[0]
+                
+                if use_cache:
+                    self.image_cache[cache_key] = (x, y)
+                
+                os.remove(local_screen)
+                self.log_message(f"找到第一个图片坐标 X:{x} Y:{y} (共{len(matches)}个匹配)", "info")
+                return (x, y)
+                
+            except ImportError:
+                self.log_message("未安装opencv-python，无法使用找图功能", "error")
+                os.remove(local_screen)
+                return None
+                
+        except Exception as e:
+            self.log_message(f"找图失败: {e}", "error")
+            return None
+        
+    def find_image(self, image_path, device=None, threshold=None, use_cache=False):
         """在模拟器屏幕上查找指定图片"""
         if threshold is None:
             threshold = self.settings_mgr.get_value("image_threshold", 0.8)
@@ -1606,10 +1476,15 @@ class ADBGUI:
             if not device:
                 return None
         
+        # 缓存检查
+        cache_key = (image_path, device, threshold)
+        if use_cache and cache_key in self.image_cache:
+            return self.image_cache[cache_key]
+        
         try:
             local_screen = "temp_screen.png"
             with open(local_screen, 'wb') as f:
-                cmd = ['adb', '-s', device, 'exec-out', 'screencap', '-p']
+                cmd = [self.adb_path, '-s', device, 'exec-out', 'screencap', '-p']
                 subprocess.run(cmd, stdout=f, check=True, timeout=5)
             
             screen_img = Image.open(local_screen)
@@ -1632,7 +1507,12 @@ class ADBGUI:
                     h, w = template_gray.shape
                     x = max_loc[0] + w // 2
                     y = max_loc[1] + h // 2
+                    
+                    if use_cache:
+                        self.image_cache[cache_key] = (x, y)
+                    
                     os.remove(local_screen)
+                    self.log_message(f"找到图片坐标 X:{x} Y:{y}", "info")
                     return (x, y)
                 else:
                     os.remove(local_screen)
@@ -1656,7 +1536,7 @@ class ADBGUI:
                 return False
         
         try:
-            cmd = ['adb', '-s', device, 'shell', 'input', 'tap', str(x), str(y)]
+            cmd = [self.adb_path, '-s', device, 'shell', 'input', 'tap', str(x), str(y)]
             subprocess.run(cmd, capture_output=True, check=True, timeout=5)
             self.log_message(f"点击坐标 ({x}, {y})", "info")
             time.sleep(delay)
@@ -1665,27 +1545,88 @@ class ADBGUI:
             self.log_message(f"点击失败 ({x},{y}): {e}", "error")
             return False
         
-    def long_press(self, x, y, duration, device=None):
-        """长按指定坐标"""
+    def long_press(self, x, y, duration=1.0, device=None, tap_offset=0.08):
+        """
+        长按并在结束前触发点击（解决 Unity 等引擎长按后菜单不弹出）
+        
+        原理：input swipe 提供持续按压（加载动画），在结束前用 input tap
+        注入一次合法的 DOWN+UP，游戏引擎识别为"长按确认"并弹出菜单。
+        
+        Args:
+            x, y: 屏幕坐标
+            duration: 长按时长（秒），默认 1.0
+            tap_offset: 在结束前多少秒触发点击（默认 0.08 = 80ms）
+                    如果菜单不弹出，尝试调大（0.15）或调小（0.05）
+        """
+        if device is None:
+            device = self.get_selected_device()
+        if not device:
+            self.log_message("长按失败：未选择设备", "error")
+            return False
+        
+        try:
+            x, y = int(x), int(y)
+            duration = float(duration)
+            tap_offset = float(tap_offset)
+            if duration < 0.15:
+                duration = 0.15
+        except (ValueError, TypeError):
+            self.log_message("长按参数错误", "error")
+            return False
+        
+        import threading
+        
+        def swipe_thread():
+            """执行 swipe 长按（带 1 像素微移，确保产生 MOVE 事件）"""
+            cmd = [self.adb_path, '-s', device, 'shell', 'input', 'swipe',
+                str(x), str(y), str(x+1), str(y+1), str(int(duration * 1000))]
+            subprocess.run(cmd, capture_output=True, timeout=duration + 5)
+        
+        def tap_thread():
+            """在长按结束前触发点击"""
+            sleep_time = max(duration - tap_offset, 0.03)
+            time.sleep(sleep_time)
+            cmd = [self.adb_path, '-s', device, 'shell', 'input', 'tap', str(x), str(y)]
+            subprocess.run(cmd, capture_output=True, timeout=5)
+        
+        t1 = threading.Thread(target=swipe_thread)
+        t2 = threading.Thread(target=tap_thread)
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        
+        self.log_message(f"✅ 长按完成 ({x},{y}) {duration}s (提前{tap_offset}s点击)", "info")
+        return True
+        
+    def swipe(self, x1, y1, x2, y2, duration=300, device=None):
+        """
+        从点1滑动到点2（按住拖拽）
+        
+        Args:
+            x1, y1: 起始坐标
+            x2, y2: 结束坐标
+            duration: 滑动持续时间（毫秒），默认300ms
+            device: 设备序列号，默认使用当前选中的设备
+        
+        Returns:
+            bool: 是否成功
+        """
         if device is None:
             device = self.get_selected_device()
             if not device:
                 return False
         
         try:
-            duration_ms = int(duration * 1000)
-            cmd = ['adb', '-s', device, 'shell', 'input', 'swipe', str(x), str(y), str(x), str(y), str(duration_ms)]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=duration + 5)
+            cmd = [self.adb_path, '-s', device, 'shell', 'input', 'swipe', 
+                str(x1), str(y1), str(x2), str(y2), str(duration)]
+            subprocess.run(cmd, capture_output=True, check=True, timeout=5)
             
-            subprocess.run(['adb', '-s', device, 'shell', 'input', 'tap', str(x), str(y)], 
-                        capture_output=True, check=True, timeout=2)
-            
-            self.log_message(f"长按坐标 ({x}, {y}) 持续 {duration} 秒", "info")
+            self.log_message(f"✅ 滑动: ({x1},{y1}) -> ({x2},{y2}) 持续 {duration}ms", "info")
             return True
         except Exception as e:
-            self.log_message(f"长按失败 ({x},{y}): {e}", "error")
+            self.log_message(f"滑动失败: {e}", "error")
             return False
-    
     def input_number_with_backspace(self, target_number, delete_count=1, device=None):
         """在输入框中先按指定次数的退格键，然后输入新的数字"""
         if device is None:
@@ -1695,7 +1636,7 @@ class ADBGUI:
         
         try:
             for i in range(delete_count):
-                cmd = ['adb', '-s', device, 'shell', 'input', 'keyevent', '67']
+                cmd = [self.adb_path, '-s', device, 'shell', 'input', 'keyevent', '67']
                 subprocess.run(cmd, capture_output=True, check=True, timeout=2)
                 time.sleep(0.15)
             
@@ -1703,7 +1644,7 @@ class ADBGUI:
             
             number_str = str(target_number)
             for char in number_str:
-                cmd = ['adb', '-s', device, 'shell', 'input', 'text', char]
+                cmd = [self.adb_path, '-s', device, 'shell', 'input', 'text', char]
                 subprocess.run(cmd, capture_output=True, check=True, timeout=2)
                 time.sleep(0.05)
             
@@ -1711,6 +1652,80 @@ class ADBGUI:
             return True
         except Exception as e:
             self.log_message(f"输入数字失败: {e}", "error")
+            return False
+
+    def input_chinese(self, text, device=None):
+        """
+        输入中文 - 使用ADBKeyboard的Base64方式
+        无论输入法是否切换成功，都尝试输入
+        """
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                return False
+        
+        # 1. 先检查ADBKeyboard是否已安装
+        try:
+            cmd = [self.adb_path, '-s', device, 'shell', 'pm', 'list', 'packages', 'com.android.adbkeyboard']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            if 'com.android.adbkeyboard' not in result.stdout:
+                self.log_message("❌ ADBKeyboard未安装，无法输入", "error")
+                messagebox.showerror("错误", "ADBKeyboard未安装！\n请先安装 ADBKeyboard.apk")
+                return False
+        except Exception as e:
+            self.log_message(f"检查ADBKeyboard失败: {e}", "error")
+            return False
+        
+        # 2. 尝试切换输入法（即使失败也继续）
+        self.log_message("🔄 尝试确保ADBKeyboard为当前输入法...", "info")
+        
+        try:
+            # 尝试切换（忽略错误）
+            cmd = [self.adb_path, '-s', device, 'shell', 'ime', 'set', 'com.android.adbkeyboard/.AdbIME']
+            subprocess.run(cmd, capture_output=True, timeout=3)
+        except:
+            pass
+        
+        try:
+            # 备用方法：启用输入法
+            cmd = [self.adb_path, '-s', device, 'shell', 'ime', 'enable', 'com.android.adbkeyboard/.AdbIME']
+            subprocess.run(cmd, capture_output=True, timeout=3)
+        except:
+            pass
+        
+        # 3. 执行输入（无论切换是否成功）
+        try:
+            import base64
+            b64_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
+            
+            # 发送广播输入
+            cmd = [self.adb_path, '-s', device, 'shell', 'am', 'broadcast', 
+                '-a', 'ADB_INPUT_B64', '--es', 'msg', b64_text]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            if result.returncode == 0:
+                self.log_message(f'✅ 输入成功: {text[:30]}{"..." if len(text) > 30 else ""}', "info")
+                return True
+            else:
+                error_msg = result.stderr if result.stderr else "未知错误"
+                self.log_message(f"❌ 输入失败: {error_msg}", "error")
+                
+                # 提示用户检查输入法
+                messagebox.showerror("输入失败", 
+                    f"输入失败！\n\n"
+                    f"错误信息: {error_msg}\n\n"
+                    "可能的原因：\n"
+                    "1. 当前输入法不是 ADBKeyboard\n"
+                    "2. 输入框未获得焦点（请点击输入框）\n"
+                    "3. ADBKeyboard未正确安装\n\n"
+                    "请确保：\n"
+                    "• 已手动切换输入法为 ADBKeyboard\n"
+                    "• 输入框处于激活状态（光标闪烁）")
+                return False
+                
+        except Exception as e:
+            self.log_message(f"❌ 输入失败: {e}", "error")
+            messagebox.showerror("错误", f"输入失败: {e}")
             return False
     
     # ---------- 测试功能 ----------
@@ -1779,13 +1794,259 @@ class ADBGUI:
         if file_path:
             try:
                 with open(file_path, 'wb') as f:
-                    cmd = ['adb', '-s', device, 'exec-out', 'screencap', '-p']
+                    cmd = [self.adb_path, '-s', device, 'exec-out', 'screencap', '-p']
                     subprocess.run(cmd, stdout=f, check=True, timeout=5)
                 self.log_message(f"截图已保存: {file_path}", "info")
                 messagebox.showinfo("成功", f"截图已保存到: {file_path}")
             except Exception as e:
                 messagebox.showerror("错误", f"截图失败: {e}")
-    
+
+    def install_adbkeyboard(self, device=None):
+        """
+        安装 ADBKeyboard
+        1. 检查当前目录是否有 ADBKeyboard.apk
+        2. 如果没有，从网络下载
+        3. 尝试安装到设备
+        """
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                self.adbkeyboard_status_label.config(text="❌ 请先选择设备", foreground="red")
+                return False
+        
+        import urllib.request
+        import os
+        
+        apk_filename = "ADBKeyboard.apk"
+        download_url = "https://cunchu.site/app/ADBKeyboard.apk"
+        
+        # 更新状态
+        self.adbkeyboard_status_label.config(text="🔄 检查APK文件...", foreground="orange")
+        self.root.update()
+        
+        try:
+            # 1. 检查文件是否存在
+            if os.path.exists(apk_filename):
+                self.log_message(f"✅ 找到本地APK: {apk_filename}", "info")
+            else:
+                # 2. 下载文件
+                self.log_message(f"📥 开始下载 ADBKeyboard.apk 从 {download_url}", "info")
+                self.adbkeyboard_status_label.config(text="📥 正在下载...", foreground="orange")
+                self.root.update()
+                
+                try:
+                    urllib.request.urlretrieve(download_url, apk_filename)
+                    self.log_message(f"✅ 下载完成: {apk_filename}", "info")
+                except Exception as e:
+                    self.adbkeyboard_status_label.config(text="❌ 下载失败", foreground="red")
+                    self.log_message(f"❌ 下载失败: {e}", "error")
+                    messagebox.showerror("下载失败", f"无法下载 ADBKeyboard.apk:\n{e}\n\n请手动下载并放到程序目录下")
+                    return False
+            
+            # 3. 检查文件大小（确保不是空文件）
+            file_size = os.path.getsize(apk_filename)
+            if file_size < 1000:  # 小于1KB认为是无效文件
+                self.log_message(f"⚠️ APK文件大小异常 ({file_size} bytes)，删除并重新下载", "warning")
+                os.remove(apk_filename)
+                # 重新下载
+                try:
+                    urllib.request.urlretrieve(download_url, apk_filename)
+                    self.log_message(f"✅ 重新下载完成", "info")
+                except Exception as e:
+                    self.adbkeyboard_status_label.config(text="❌ 下载失败", foreground="red")
+                    messagebox.showerror("下载失败", f"重新下载失败: {e}")
+                    return False
+            
+            # 4. 安装到设备
+            self.log_message(f"📲 正在安装 ADBKeyboard 到设备 {device}...", "info")
+            self.adbkeyboard_status_label.config(text="📲 正在安装...", foreground="orange")
+            self.root.update()
+            
+            cmd = [self.adb_path, '-s', device, 'install', '-r', apk_filename]
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            
+            if result.returncode == 0:
+                self.log_message("✅ ADBKeyboard 安装成功！", "info")
+                self.adbkeyboard_status_label.config(text="✅ 安装成功！", foreground="green")
+                messagebox.showinfo("安装成功", "ADBKeyboard 已成功安装到设备！\n\n点击「检测并激活」切换输入法。")
+                
+                # 自动尝试激活
+                self.check_and_activate_adbkeyboard(device)
+                return True
+            else:
+                error_msg = result.stderr if result.stderr else result.stdout
+                self.log_message(f"❌ 安装失败: {error_msg}", "error")
+                
+                # 检查是否是 INSTALL_FAILED_ALREADY_EXISTS
+                if "INSTALL_FAILED_ALREADY_EXISTS" in error_msg:
+                    self.adbkeyboard_status_label.config(text="⚠️ 已安装 (可重新安装)", foreground="orange")
+                    messagebox.showinfo("已安装", "ADBKeyboard 已经安装在设备上。\n\n如需重新安装，请先卸载旧版本。")
+                else:
+                    self.adbkeyboard_status_label.config(text="❌ 安装失败", foreground="red")
+                    messagebox.showerror("安装失败", f"安装失败:\n{error_msg}\n\n可能的原因:\n1. 设备未连接\n2. USB调试未开启\n3. 安装权限不足")
+                return False
+                
+        except Exception as e:
+            self.adbkeyboard_status_label.config(text="❌ 操作失败", foreground="red")
+            self.log_message(f"❌ 安装过程出错: {e}", "error")
+            messagebox.showerror("错误", f"安装过程中出错:\n{e}")
+            return False
+
+    def check_and_activate_adbkeyboard(self, device=None):
+        """
+        检测ADBKeyboard是否已安装，尝试切换，失败则提示手动切换
+        """
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                self.adbkeyboard_status_label.config(text="❌ 未选择设备", foreground="red")
+                return False
+        
+        try:
+            # 1. 检查ADBKeyboard是否已安装
+            cmd = [self.adb_path, '-s', device, 'shell', 'pm', 'list', 'packages', 'com.android.adbkeyboard']
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+            
+            if 'com.android.adbkeyboard' not in result.stdout:
+                self.adbkeyboard_status_label.config(text="❌ ADBKeyboard未安装", foreground="red")
+                self.log_message("❌ ADBKeyboard未安装，请先安装ADBKeyboard.apk", "error")
+                messagebox.showerror("错误", 
+                    "ADBKeyboard未安装！\n\n"
+                    "请下载 ADBKeyboard.apk 并安装：\n"
+                    "1. 下载 ADBKeyboard.apk\n"
+                    "2. 执行: adb install ADBKeyboard.apk")
+                return False
+            
+            # 2. 尝试切换输入法（可能因权限失败）
+            self.adbkeyboard_status_label.config(text="🔄 正在尝试切换输入法...", foreground="orange")
+            self.log_message("🔄 正在尝试切换到ADBKeyboard...", "info")
+            
+            switch_success = False
+            error_msg = ""
+            
+            # 方法1: 使用 ime set（标准方法）
+            try:
+                cmd = [self.adb_path, '-s', device, 'shell', 'ime', 'set', 'com.android.adbkeyboard/.AdbIME']
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    switch_success = True
+                    self.log_message("✅ 已通过 ime set 切换输入法", "info")
+                else:
+                    error_msg = result.stderr.strip()
+            except Exception as e:
+                error_msg = str(e)
+            
+            # 方法2: 如果方法1失败，尝试启用 + 设置
+            if not switch_success:
+                try:
+                    # 先启用
+                    cmd = [self.adb_path, '-s', device, 'shell', 'ime', 'enable', 'com.android.adbkeyboard/.AdbIME']
+                    subprocess.run(cmd, capture_output=True, timeout=3)
+                    time.sleep(0.2)
+                    
+                    # 尝试通过 settings 设置
+                    cmd = [self.adb_path, '-s', device, 'shell', 'settings', 'put', 'secure', 
+                        'default_input_method', 'com.android.adbkeyboard/.AdbIME']
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+                    if result.returncode == 0:
+                        switch_success = True
+                        self.log_message("✅ 已通过 settings 切换输入法", "info")
+                except Exception as e:
+                    pass
+            
+            # 3. 更新状态显示
+            if switch_success:
+                self.adbkeyboard_status_label.config(text="✅ ADBKeyboard已激活", foreground="green")
+                self.log_message("✅ ADBKeyboard已成功切换为当前输入法", "info")
+            else:
+                self.adbkeyboard_status_label.config(
+                    text="⚠️ ADBKeyboard已安装 (请手动切换输入法)", 
+                    foreground="orange"
+                )
+                self.log_message(f"⚠️ 无法自动切换输入法: {error_msg}", "warning")
+                self.log_message("💡 请手动在设备设置中切换输入法为 ADBKeyboard", "info")
+                
+                # 只提示一次，避免频繁弹窗
+                if not hasattr(self, '_manual_switch_shown'):
+                    self._manual_switch_shown = True
+                    messagebox.showinfo("手动切换提示", 
+                        "ADBKeyboard已安装，但无法自动切换输入法。\n\n"
+                        "请按以下步骤手动切换：\n"
+                        "1. 在模拟器/设备中打开任意输入框\n"
+                        "2. 点击键盘切换图标\n"
+                        "3. 选择 ADBKeyboard 输入法\n\n"
+                        "之后就可以正常输入中文了！")
+            
+            return True  # 无论是否切换成功，只要安装了就返回True，允许尝试输入
+                    
+        except Exception as e:
+            self.adbkeyboard_status_label.config(text=f"❌ 检测失败: {e}", foreground="red")
+            self.log_message(f"❌ 检测ADBKeyboard失败: {e}", "error")
+            return False
+
+    def ensure_adbkeyboard_ready(self, device=None):
+        """
+        确保ADBKeyboard已准备就绪（尝试切换，失败也继续）
+        """
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                return False
+        
+        # 直接调用检测方法
+        return self.check_and_activate_adbkeyboard(device)
+
+    def test_adbkeyboard_input(self):
+        """测试使用ADBKeyboard输入中文"""
+        device = self.get_selected_device()
+        if not device:
+            return
+        
+        text = self.test_text_entry.get().strip()
+        if not text:
+            messagebox.showwarning("警告", "请输入要测试的文本")
+            return
+        
+        # 直接尝试输入（内部会尝试切换并提示）
+        self.input_chinese(text)
+
+    def show_adbkeyboard_help(self):
+        """显示ADBKeyboard使用帮助"""
+        help_text = """
+        📖 ADBKeyboard 使用说明
+        
+        ═══════════════════════════════════════
+        
+        📌 自动检测与激活
+        • 程序会自动检测ADBKeyboard状态
+        • 如果已安装但未激活，会自动激活
+        • 状态显示在"检测并激活"按钮旁边
+        
+        📌 首次使用准备
+        1. 下载 ADBKeyboard.apk
+        2. 使用以下命令安装：
+        adb install ADBKeyboard.apk
+        
+        📌 使用步骤
+        1. 选择设备
+        2. 点击"检测并激活"按钮
+        3. 在模拟器中点击输入框（获得焦点）
+        4. 输入文本并点击"输入文本"按钮
+        
+        📌 手动激活命令
+        adb shell ime enable com.android.adbkeyboard/.AdbIME
+        adb shell ime set com.android.adbkeyboard/.AdbIME
+        
+        📌 ADBKeyboard优势
+        ✅ 支持中文和特殊字符
+        ✅ 不需要系统剪贴板权限
+        ✅ 输入速度快
+        ✅ 支持Base64编码，兼容性好
+        ✅ 自动激活，无需手动设置
+        
+        ═══════════════════════════════════════
+        """
+        messagebox.showinfo("ADBKeyboard使用说明", help_text)
     # ---------- 辅助函数 ----------
     def log_message(self, msg, level="info"):
         """在日志区域添加消息"""

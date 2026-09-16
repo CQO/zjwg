@@ -2,53 +2,27 @@
 # 这个文件可以放在程序同目录下，修改后无需重新打包
 
 import time
+import hashlib
+import subprocess
 from PIL import Image
 
 # 功能配置 - 定义每个功能的显示名称、颜色和描述
 FUNCTION_CONFIGS = {
-    "城墙": {
+    "寻找可关注": {
         "color": "#4CAF50",
-        "desc": "执行城墙任务"
+        "desc": "执行寻找可关注任务"
     },
-    "战令活动": {
-        "color": "#FF9800",
-        "desc": "执行战令活动任务"
-    },
-    "挂机奖励": {
-        "color": "#2196F3",
-        "desc": "执行挂机奖励任务"
-    },
-    "征兵任务": {
+    "寻找可收藏": {
         "color": "#4CAF50",
-        "desc": "执行征兵任务"
+        "desc": "执行寻找可收藏任务"
     },
-    "采集金矿": {
-        "color": "#FF9800",
-        "desc": "执行采集金矿任务"
-    },
-    "采集农田": {
-        "color": "#FF9800",
-        "desc": "执行采集农田任务"
-    },
-    "采集伐木场": {
-        "color": "#FF9800",
-        "desc": "执行采集伐木场任务"
-    },
-    "采集水晶矿": {
-        "color": "#FF9800",
-        "desc": "执行采集水晶矿任务"
-    },
-    "集结泰坦": {
-        "color": "#FF9800",
-        "desc": "执行集结泰坦任务"
-    },
-    "集结哈罗德": {
-        "color": "#FF9800",
-        "desc": "执行集结哈罗德任务"
-    },
-    "搜索任务": {
+    "关注列表私信": {
         "color": "#4CAF50",
-        "desc": "执行搜索任务"
+        "desc": "执行关注列表私信任务"
+    },
+    "滑动到关注第一个": {
+        "color": "#4CAF50",
+        "desc": "执行滑动到关注第一个任务"
     },
 }
 
@@ -64,9 +38,17 @@ class Functions:
         """获取颜色 - 调用主程序的取色方法"""
         return self.app.get_color(x, y, device)
     
-    def find_image(self, image_path, device=None, threshold=None):
+    def find_image(self, image_path, device=None, threshold=None, use_cache=False):
         """找图 - 调用主程序的找图方法"""
-        return self.app.find_image(image_path, device, threshold)
+        return self.app.find_image(image_path, device, threshold, use_cache)
+
+    def find_image_first(self, image_path, device=None, threshold=None, use_cache=False):
+        """找图 - 调用主程序的找图方法返回匹配的第一个"""
+        return self.app.find_image_first(image_path, device, threshold, use_cache)
+    
+    def press_back(self,device=None):
+            """点击 - 调用主程序的返回方法"""
+            return self.app.press_back(device)
     
     def click_point(self, x, y, device=None, delay=None):
         """点击 - 调用主程序的点击方法"""
@@ -75,319 +57,157 @@ class Functions:
     def long_press(self, x, y, duration, device=None):
         """长按 - 调用主程序的长按方法"""
         return self.app.long_press(x, y, duration, device)
+    def swipe(self, x1, y1, x2, y2, duration=300, device=None):
+        """滑动 - 调用主程序的滑动方法"""
+        return self.app.swipe(x1, y1, x2, y2, duration, device)
     
     def input_number_with_backspace(self, target_number, delete_count=1, device=None):
         """输入数字 - 调用主程序的输入方法"""
         return self.app.input_number_with_backspace(target_number, delete_count, device)
+    def input_chinese(self, text, device=None):
+        return self.app.input_chinese(text, device)
     
     def log_message(self, msg, level="info"):
         """日志 - 调用主程序的日志方法"""
         self.app.log_message(msg, level)
-    
-    # ========== 以下是具体的功能函数 ==========
-    
-    def 城墙(self):
-        """城墙任务"""
-        color = self.get_color(110, 1251)
-        if color and color.lower() != '42AAE7':
-            self.log_message("进入城堡页面", "info")
-            self.click_point(110, 1251)
-            time.sleep(2)
-        
-        self.log_message("进入城墙界面", "info")
-        self.click_point(364, 904)
-        time.sleep(2)
-        
-        retry_times = self.settings_mgr.get_value("retry_times", 3)
-        for i in range(retry_times):
-            if self.get_color(300, 1180) == '4282C6':
-                break
-            self.log_message(f"等待城堡页面加载... (尝试 {i+1}/{retry_times})", "info")
-            time.sleep(1)
-        
-        self.log_message("领取收益", "info")    
-        self.click_point(580, 1210)
-        time.sleep(2) 
-        self.click_point(357, 1153)
-        time.sleep(2)
-        self.log_message("一键驻防", "info")    
-        self.click_point(300, 1180)
-        time.sleep(2)
-        self.click_point(53, 157)
-    
-    def 战令活动(self):
-        """战令活动任务"""
-        time.sleep(2)
-        self.click_point(673, 596)
-        time.sleep(3)
-        
+    def get_selected_device(self):
+        return self.app.get_selected_device()
+    def get_screen_size(self, device=None):
+        """获取颜色 - 调用主程序的取色方法"""
+        return self.app.get_screen_size(device)
+    def findImgAndClick(self, imgPath, xOffset = 0, yOffset = 0, use_cache=False, thresholdValue=0.8):
         threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("1.png", threshold=threshold)
+        pos = self.find_image(imgPath, threshold=threshold, use_cache=use_cache)
         if pos:
-            self.log_message(f"找到图片位置: {pos}", "info")
-            self.click_point(pos[0] - 100, pos[1])
-            time.sleep(2)
-            self.click_point(pos[0] - 100, pos[1])
-        else:
-            self.log_message("未找到图片", "info")
-        time.sleep(2)
-        self.click_point(45, 72)
-    
-    def 挂机奖励(self):
-        """挂机奖励任务"""
-        time.sleep(2)
-        self.click_point(420, 1237)
-        time.sleep(4)
-        self.click_point(205, 844)
-        time.sleep(2)
-        self.click_point(538, 866)
-        time.sleep(2)
-        self.click_point(368, 744)
-        
-        time.sleep(3)
-        self.click_point(205, 844)
-        time.sleep(2)
-        
-        max_retries = self.settings_mgr.get_value("retry_times", 3)
-        retry_count = 0
-        while self.get_color(382, 873).startswith('42') and retry_count < max_retries:
-            self.log_message("可以进行扫荡...", "info")
-            self.click_point(382, 873)
-            time.sleep(4)
-            retry_count += 1
-        
-        while self.get_color(218, 655) == '5ACF39':
-            self.log_message("尝试看广告...", "info")
-            self.click_point(218, 655)
-            time.sleep(1)
-            if self.get_color(365, 681) != 'DEEBF7':
-                self.click_point(365, 681)
-            else:
-                self.log_message("看不了广告了 下一步...", "info")
-                break
-        
-        self.click_point(671, 293)
-        time.sleep(3)
-        self.log_message("看广告...", "info")
-        
-        while self.get_color(189, 441) == 'DEEBF7':
-            self.click_point(174, 872)
-            time.sleep(1)
-        self.log_message("返回主页面...", "info")
-        self.click_point(671, 293)
-    
-    def 征兵任务(self):
-        """征兵任务"""
-        time.sleep(1)
-        self.click_point(66, 1236)
-        time.sleep(2)
-        self.click_point(208, 489)
-        time.sleep(1)
-        self.click_point(137, 205)
-        
-        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("zhengbing.png", threshold=threshold)
-        if pos:
-            self.log_message(f"找到征兵按钮: {pos}", "info")
-            self.click_point(pos[0], pos[1])
-        
-        time.sleep(2)
-        self.click_point(52, 109)
-    
-    def 采集金矿(self):
-        self.采集(150)
-    
-    def 采集农田(self):
-        self.采集(300)
-    
-    def 采集伐木场(self):
-        self.采集(450)
-    
-    def 采集水晶矿(self):
-        self.采集(600)
-    
-    def 采集(self, xPoint):
-        """通用采集函数"""
-        if self.get_color(700, 1225) != 'FFCB4A':
-            self.click_point(700, 1225)
-            time.sleep(4)
-        self.click_point(700, 1225)
-        time.sleep(1)
-        self.click_point(277, 381)
-        time.sleep(1)
-        self.click_point(xPoint, 550)
-        time.sleep(1)
-        self.click_point(370, 920)
-        time.sleep(4)
-        self.click_point(357, 615)
-        time.sleep(3)
-        
-        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("6.png", threshold=threshold)
-        if pos:
-            self.log_message(f"找到采集按钮: {pos}", "info")
-            self.click_point(pos[0], pos[1])
-            time.sleep(2)
-            if self.设置出兵数量():
-                self.log_message(f"设置出兵量成功!", "info")
-                pos = self.find_image("2.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"找到出发位置: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-    
-    def 集结泰坦(self):
-        """集结泰坦"""
-        if self.get_color(700, 1225) != 'FFCB4A':
-            self.click_point(700, 1225)
-            time.sleep(4)
-        self.click_point(700, 1225)
-        time.sleep(1)
-        self.click_point(443, 383)
-        time.sleep(1)
-        self.click_point(435, 920)
-        time.sleep(2)
-        
-        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("7.png", threshold=threshold)
-        if pos is None:
-            pos = self.find_image("5.png", threshold=threshold)
-        if pos:
-            self.log_message(f"找到集结按钮: {pos}", "info")
-            self.click_point(pos[0], pos[1])
-            time.sleep(3)
-            if self.设置出兵数量():
-                self.log_message(f"设置出兵量成功!", "info")
-                pos = self.find_image("2.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"找到出发位置: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-    
-    def 集结哈罗德(self):
-        """集结哈罗德"""
-        if self.get_color(700, 1225) != 'FFCB4A':
-            self.click_point(700, 1225)
-            time.sleep(4)
-        self.click_point(700, 1225)
-        time.sleep(1)
-        self.click_point(604, 383)
-        time.sleep(1)
-        self.click_point(435, 920)
-        time.sleep(2)
-        
-        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("7.png", threshold=threshold)
-        if pos is None:
-            pos = self.find_image("5.png", threshold=threshold)
-        if pos:
-            self.log_message(f"找到集结按钮: {pos}", "info")
-            self.click_point(pos[0], pos[1])
-            time.sleep(3)
-            if self.设置出兵数量():
-                self.log_message(f"设置出兵量成功!", "info")
-                pos = self.find_image("2.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"找到出发位置: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-    
-    def 关闭弹窗(self):
-        """关闭弹窗"""
-        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("close.png", threshold=threshold)
-        if pos:
-            self.log_message(f"关闭弹窗: {pos}", "info")
-            self.click_point(pos[0], pos[1])
-    
-    def 设置出兵数量(self):
-        """设置出兵数量"""
-        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-        pos = self.find_image("3.png", threshold=threshold)
-        if pos:
-            self.log_message(f"找到设置位置: {pos}", "info")
-            self.click_point(pos[0], pos[1])
-            time.sleep(1)
-            self.click_point(610, 605)
-            time.sleep(1)
-            self.input_number_with_backspace(self.settings_mgr.get_value("派出兵力", "1"), 7)
-            time.sleep(1)
-            self.click_point(635, 1218)
-            time.sleep(1)
-            self.click_point(515, 1208)
-            time.sleep(1)
+            self.log_message("找到星星按钮", "info")
+            self.click_point(pos[0] + xOffset, pos[1] + yOffset)
             return True
         return False
+
+    # ========== 以下是具体的功能函数 ==========
     
-    def 搜索任务(self):
-        """搜索任务"""
-        列表搜索点坐标X = self.settings_mgr.get_value("搜索点坐标X", "").split('@')
-        列表搜索点坐标Y = self.settings_mgr.get_value("搜索点坐标Y", "").split('@')
+            
+    def capture_and_upload(self, device=None):
+        """
+        截取设备屏幕并上传到服务器
         
-        for i in range(len(列表搜索点坐标X)):
-            搜索点坐标X = 列表搜索点坐标X[i]
-            搜索点坐标Y = 列表搜索点坐标Y[i]
-            
-            if self.get_color(700, 1225) != 'FFCB4A':
-                self.click_point(700, 1225)
-                time.sleep(2)
-            
-            self.click_point(120, 195)
-            time.sleep(1)
-            self.click_point(235, 584)
-            time.sleep(1)
-            self.input_number_with_backspace(搜索点坐标X, 4)
-            time.sleep(1)
-            self.click_point(635, 1218)
-            time.sleep(1)
-            self.click_point(518, 584)
-            time.sleep(1)
-            self.input_number_with_backspace(搜索点坐标Y, 4)
-            time.sleep(1)
-            self.click_point(366, 684)
-            time.sleep(3)
-            self.click_point(379, 646)
-            time.sleep(1)
-            
-            threshold = self.settings_mgr.get_value("image_threshold", 0.8)
-            pos = self.find_image("4.png", threshold=threshold)
-            if pos:
-                self.log_message(f"防御位置: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-            if pos is None:
-                pos = self.find_image("5.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"发起集结: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-            if pos is None:
-                pos = self.find_image("6.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"发起采集: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
-            
-            if pos is None:
-                self.log_message(f"找不到对应的操作", "info")
-                self.关闭弹窗()
-                continue
-            
-            time.sleep(1)
-            self.click_point(227, 486)
-            time.sleep(2)
-            
-            pos = self.find_image("3.png", threshold=threshold)
-            if pos:
-                self.log_message(f"找到设置位置: {pos}", "info")
-                self.click_point(pos[0], pos[1])
-                time.sleep(1)
-                self.click_point(610, 605)
-                time.sleep(1)
-                self.input_number_with_backspace(self.settings_mgr.get_value("派出兵力", "1"), 7)
-                time.sleep(1)
-                self.click_point(635, 1218)
-                time.sleep(1)
-                self.click_point(515, 1208)
-                time.sleep(1)
-                pos = self.find_image("2.png", threshold=threshold)
-                if pos:
-                    self.log_message(f"找到出发按钮: {pos}", "info")
-                    self.click_point(pos[0], pos[1])
+        :param device: 设备序列号，None则使用当前选中的设备
+        :param server_url: 服务器上传地址
+        :return: (success, response_text) 或 (False, error_message)
+        """
+        import requests
+        import os
+        
+        if device is None:
+            device = self.get_selected_device()
+            if not device:
+                return False, "未选择设备"
             else:
-                self.log_message(f"没有找到设置位置!", "error")
-            time.sleep(10)
+                self.log_message(f"选择设备: {device}", "info")
+        
+        try:
+            # 1. 截图保存到本地临时文件
+            local_screen = "temp_upload_screen.png"
+            server_url="http://localhost:5000/upload/" + hashlib.md5(device.encode('utf-8')).hexdigest()
+            # 使用 exec-out 方式截图（更快）
+            with open(local_screen, 'wb') as f:
+                cmd = ['adb', '-s', device, 'exec-out', 'screencap', '-p']
+                subprocess.run(cmd, stdout=f, check=True, timeout=15)
+            
+            self.log_message(f"截图已保存到: {local_screen}", "info")
+            
+            # 2. 检查文件是否存在
+            if not os.path.exists(local_screen):
+                return False, "截图文件创建失败"
+            
+            # 3. 上传到服务器
+            try:
+                with open(local_screen, 'rb') as f:
+                    files = {'image': (local_screen, f, 'image/png')}
+                    response = requests.post(server_url, files=files, timeout=30)
+                    
+                # 删除临时文件
+                try:
+                    os.remove(local_screen)
+                except:
+                    pass
+                
+                if response.status_code == 200:
+                    self.log_message(f"图片上传成功: {server_url}", "info")
+                    return True, response.text
+                else:
+                    error_msg = f"上传失败，状态码: {response.status_code}, 响应: {response.text}"
+                    self.log_message(error_msg, "error")
+                    return False, error_msg
+                    
+            except requests.exceptions.ConnectionError:
+                self.log_message(f"无法连接到服务器: {server_url}", "error")
+                return False, "服务器连接失败"
+            except requests.exceptions.Timeout:
+                self.log_message("上传超时", "error")
+                return False, "上传超时"
+            except Exception as e:
+                error_msg = f"上传异常: {e}"
+                self.log_message(error_msg, "error")
+                return False, error_msg
+                
+        except subprocess.TimeoutExpired:
+            self.log_message("截图超时", "error")
+            return False, "截图超时"
+        except Exception as e:
+            error_msg = f"截图失败: {e}"
+            self.log_message(error_msg, "error")
+            return False, error_msg
+        
+
+
+
+    def 关注列表私信(self):
+        self.click_point(491, 552)
+        time.sleep(2)
+        self.findImgAndClick("./抖音榜单/sendMessage.png", 0 , 0, True)
+        time.sleep(2)
+        self.findImgAndClick("./抖音榜单/more.png", 180 , 0, True)
+        time.sleep(2)
+        self.input_chinese("sdsd")
+        time.sleep(2)
+        self.press_back()
+        time.sleep(2)
+        self.press_back()
+        time.sleep(3)
+        # 判断是否在发私信页面
+        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
+        pos = self.find_image("./抖音榜单/sendMessage.png", threshold=threshold, use_cache=False)
+        if pos:
+            self.press_back()
+            time.sleep(2)
+        
+        self.swipe(530, 1300, 530, 1200)
+
+    def 滑动到关注第一个(self):
+        threshold = self.settings_mgr.get_value("image_threshold", 0.8)
+        pos = self.find_image("./抖音榜单/wdgz.png", threshold=threshold, use_cache=False)
+        if pos:
+            self.log_message("找到好友按钮", "info")
+            # time.sleep(2)
+            self.swipe(530, 1461, 530, 1200)
+        else:
+            self.log_message("没有找到好友", "info")
+            
+
+        
+    def 寻找可收藏(self):
+        self.findImgAndClick("./抖音榜单/collect.png", 0 , 0)
+        time.sleep(1)
+
+        self.swipe(530, 1396, 530, 1183)
+
+    def 寻找可关注(self):
+        self.findImgAndClick("./抖音榜单/collect.png", -100 , 0)
+        time.sleep(2)
+        self.findImgAndClick("./抖音榜单/focus.png", 0 , 0)
+        time.sleep(6)
+        self.press_back()
+        time.sleep(2)
+        self.swipe(530, 1596, 530, 1183)
+

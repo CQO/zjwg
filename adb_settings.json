@@ -1,11 +1,18 @@
 {
+  "task_interval": 1.0,
   "click_delay": 0.5,
   "retry_times": 3,
   "image_threshold": 0.8,
   "default_x": 100,
   "default_y": 100,
-  "派出兵力": 1,
-  "搜索点坐标X": "3222@3260@3264@3255",
-  "搜索点坐标Y": "3495@3500@3535@3555",
-  "task_queue": []
+  "派出兵力": "1",
+  "搜索点坐标X": "0@0",
+  "搜索点坐标Y": "0@0",
+  "task_queue": [
+    {
+      "name": "滑动到关注第一个",
+      "times": 1,
+      "interval": 1.0
+    }
+  ]
 }
