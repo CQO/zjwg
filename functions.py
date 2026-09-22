@@ -2,8 +2,6 @@
 # 这个文件可以放在程序同目录下，修改后无需重新打包
 
 import time
-import hashlib
-import subprocess
 from PIL import Image
 
 # 功能配置 - 定义每个功能的显示名称、颜色和描述
@@ -37,6 +35,21 @@ class Functions:
     def get_color(self, x, y, device=None):
         """获取颜色 - 调用主程序的取色方法"""
         return self.app.get_color(x, y, device)
+
+    def get_screen_texts(self, device=None):
+        return self.app.get_screen_texts(device)
+
+    def find_texts_first(self, keyword, exact=False, device=None):
+        items = self.app.get_screen_texts(device)
+        if not items:
+            return None
+
+        for row in items:
+            text, cx, cy = row[0], row[1], row[2]
+            if (text == keyword) if exact else (keyword in text):
+                self.log_message(f"找到文字 '{text[:20]}' → 坐标 ({cx}, {cy})", "info")
+                return (cx, cy)
+        return None
     
     def find_image(self, image_path, device=None, threshold=None, use_cache=False):
         """找图 - 调用主程序的找图方法"""
@@ -72,6 +85,8 @@ class Functions:
         self.app.log_message(msg, level)
     def get_selected_device(self):
         return self.app.get_selected_device()
+    def capture_and_upload(self):
+        return self.app.capture_and_upload()
     def get_screen_size(self, device=None):
         """获取颜色 - 调用主程序的取色方法"""
         return self.app.get_screen_size(device)
@@ -87,77 +102,7 @@ class Functions:
     # ========== 以下是具体的功能函数 ==========
     
             
-    def capture_and_upload(self, device=None):
-        """
-        截取设备屏幕并上传到服务器
-        
-        :param device: 设备序列号，None则使用当前选中的设备
-        :param server_url: 服务器上传地址
-        :return: (success, response_text) 或 (False, error_message)
-        """
-        import requests
-        import os
-        
-        if device is None:
-            device = self.get_selected_device()
-            if not device:
-                return False, "未选择设备"
-            else:
-                self.log_message(f"选择设备: {device}", "info")
-        
-        try:
-            # 1. 截图保存到本地临时文件
-            local_screen = "temp_upload_screen.png"
-            server_url="http://localhost:5000/upload/" + hashlib.md5(device.encode('utf-8')).hexdigest()
-            # 使用 exec-out 方式截图（更快）
-            with open(local_screen, 'wb') as f:
-                cmd = ['adb', '-s', device, 'exec-out', 'screencap', '-p']
-                subprocess.run(cmd, stdout=f, check=True, timeout=15)
-            
-            self.log_message(f"截图已保存到: {local_screen}", "info")
-            
-            # 2. 检查文件是否存在
-            if not os.path.exists(local_screen):
-                return False, "截图文件创建失败"
-            
-            # 3. 上传到服务器
-            try:
-                with open(local_screen, 'rb') as f:
-                    files = {'image': (local_screen, f, 'image/png')}
-                    response = requests.post(server_url, files=files, timeout=30)
-                    
-                # 删除临时文件
-                try:
-                    os.remove(local_screen)
-                except:
-                    pass
-                
-                if response.status_code == 200:
-                    self.log_message(f"图片上传成功: {server_url}", "info")
-                    return True, response.text
-                else:
-                    error_msg = f"上传失败，状态码: {response.status_code}, 响应: {response.text}"
-                    self.log_message(error_msg, "error")
-                    return False, error_msg
-                    
-            except requests.exceptions.ConnectionError:
-                self.log_message(f"无法连接到服务器: {server_url}", "error")
-                return False, "服务器连接失败"
-            except requests.exceptions.Timeout:
-                self.log_message("上传超时", "error")
-                return False, "上传超时"
-            except Exception as e:
-                error_msg = f"上传异常: {e}"
-                self.log_message(error_msg, "error")
-                return False, error_msg
-                
-        except subprocess.TimeoutExpired:
-            self.log_message("截图超时", "error")
-            return False, "截图超时"
-        except Exception as e:
-            error_msg = f"截图失败: {e}"
-            self.log_message(error_msg, "error")
-            return False, error_msg
+    
         
 
 

@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 
 
@@ -7,12 +8,21 @@ class SettingsManager:
 
     def __init__(self, settings_file=None):
         if settings_file is None:
-            # 基于本文件所在目录的上一级（项目根）定位配置文件
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            settings_file = os.path.join(base_dir, "adb_settings.json")
+            settings_file = self._get_default_settings_path()
         self.settings_file = settings_file
         self.settings = {}
         self.load_settings()
+
+    @staticmethod
+    def _get_default_settings_path():
+        """获取默认配置文件路径（exe 同级 或 项目根目录）"""
+        if getattr(sys, 'frozen', False):
+            # 打包后（PyInstaller）：exe 所在目录
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # 源码运行：项目根目录（本文件上一级）
+            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        return os.path.join(base_dir, "adb_settings.json")
 
     def load_settings(self):
         """从文件加载设置"""
@@ -23,15 +33,6 @@ class SettingsManager:
             else:
                 # 创建默认设置
                 self.settings = {
-                    "task_interval": 1.0,
-                    "click_delay": 0.5,
-                    "retry_times": 3,
-                    "image_threshold": 0.8,
-                    "default_x": 100,
-                    "default_y": 100,
-                    "派出兵力": "1",
-                    "搜索点坐标X": "0@0",
-                    "搜索点坐标Y": "0@0"
                 }
                 self.save_settings()
         except Exception as e:
