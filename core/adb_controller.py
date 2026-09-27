@@ -9,6 +9,11 @@ import urllib.request
 
 from PIL import Image
 
+try:
+    import uiautomator2 as u2
+except ImportError:
+    u2 = None
+
 
 class AdbController:
     """
@@ -36,6 +41,8 @@ class AdbController:
         self.logger = logger or (lambda msg, level="info": None)
         self.settings_mgr = settings_mgr
         self.image_cache = {}  # {(image_path, device, threshold): (x, y)}
+        self._d = None         # uiautomator2 设备对象缓存
+        self._d_serial = None  # 缓存对应的设备序列号
 
     # ---------------- 内部工具 ----------------
     def _log(self, msg, level="info"):
@@ -64,7 +71,8 @@ class AdbController:
         try:
             result = subprocess.run(
                 [self.adb_path, 'devices'],
-                capture_output=True, text=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW
+                capture_output=True, text=True, timeout=timeout,
+                creationflags=subprocess.CREATE_NO_WINDOW
             )
             devices = []
             for line in result.stdout.strip().split('\n')[1:]:
@@ -83,7 +91,8 @@ class AdbController:
         """启动 adb 服务"""
         try:
             subprocess.run([self.adb_path, 'start-server'],
-                           capture_output=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+                           capture_output=True, timeout=timeout,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             return True
         except Exception as e:
             self._log(f"启动 ADB 服务失败: {e}", "error")
@@ -93,7 +102,8 @@ class AdbController:
         """获取屏幕原始 PNG 字节流，失败返回 None"""
         try:
             cmd = [self.adb_path, '-s', device, 'exec-out', 'screencap', '-p']
-            result = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(cmd, capture_output=True, timeout=timeout,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
             if result.returncode != 0 or not result.stdout:
                 return None
             return result.stdout
@@ -117,7 +127,8 @@ class AdbController:
         """按下返回键"""
         try:
             cmd = [self.adb_path, '-s', device, 'shell', 'input', 'keyevent', self.KEYCODE_BACK]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(cmd, capture_output=True, check=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             self._log("按下返回按钮", "info")
             time.sleep(delay)
             return True
@@ -130,7 +141,8 @@ class AdbController:
         delay = self._get_click_delay(delay)
         try:
             cmd = [self.adb_path, '-s', device, 'shell', 'input', 'tap', str(x), str(y)]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(cmd, capture_output=True, check=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             self._log(f"点击坐标 ({x}, {y})", "info")
             time.sleep(delay)
             return True
@@ -155,13 +167,15 @@ class AdbController:
         def swipe_thread():
             cmd = [self.adb_path, '-s', device, 'shell', 'input', 'swipe',
                    str(x), str(y), str(x + 1), str(y + 1), str(int(duration * 1000))]
-            subprocess.run(cmd, capture_output=True, timeout=duration + 5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(cmd, capture_output=True, timeout=duration + 5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
 
         def tap_thread():
             sleep_time = max(duration - tap_offset, 0.03)
             time.sleep(sleep_time)
             cmd = [self.adb_path, '-s', device, 'shell', 'input', 'tap', str(x), str(y)]
-            subprocess.run(cmd, capture_output=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(cmd, capture_output=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
 
         t1 = threading.Thread(target=swipe_thread)
         t2 = threading.Thread(target=tap_thread)
@@ -178,7 +192,8 @@ class AdbController:
         try:
             cmd = [self.adb_path, '-s', device, 'shell', 'input', 'swipe',
                    str(x1), str(y1), str(x2), str(y2), str(duration)]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(cmd, capture_output=True, check=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             self._log(f"✅ 滑动: ({x1},{y1}) -> ({x2},{y2}) 持续 {duration}ms", "info")
             return True
         except Exception as e:
@@ -190,7 +205,8 @@ class AdbController:
         try:
             for ch in str(text):
                 cmd = [self.adb_path, '-s', device, 'shell', 'input', 'text', ch]
-                subprocess.run(cmd, capture_output=True, check=True, timeout=2, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run(cmd, capture_output=True, check=True, timeout=2,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
                 time.sleep(char_delay)
             return True
         except Exception as e:
@@ -202,7 +218,8 @@ class AdbController:
         try:
             for _ in range(delete_count):
                 cmd = [self.adb_path, '-s', device, 'shell', 'input', 'keyevent', self.KEYCODE_DEL]
-                subprocess.run(cmd, capture_output=True, check=True, timeout=2, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run(cmd, capture_output=True, check=True, timeout=2,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
                 time.sleep(0.15)
 
             time.sleep(0.3)
@@ -210,7 +227,8 @@ class AdbController:
             number_str = str(target_number)
             for ch in number_str:
                 cmd = [self.adb_path, '-s', device, 'shell', 'input', 'text', ch]
-                subprocess.run(cmd, capture_output=True, check=True, timeout=2, creationflags=subprocess.CREATE_NO_WINDOW)
+                subprocess.run(cmd, capture_output=True, check=True, timeout=2,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
                 time.sleep(0.05)
 
             self._log(f"重新输入: {number_str} (已删除{delete_count}个字符)", "info")
@@ -330,11 +348,13 @@ class AdbController:
         try:
             temp_file = "/sdcard/temp_screencap.png"
             cmd = [self.adb_path, '-s', device, 'shell', 'screencap', temp_file]
-            subprocess.run(cmd, capture_output=True, check=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(cmd, capture_output=True, check=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
 
             local_temp = "temp_screencap.png"
             pull_cmd = [self.adb_path, '-s', device, 'pull', temp_file, local_temp]
-            subprocess.run(pull_cmd, capture_output=True, check=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            subprocess.run(pull_cmd, capture_output=True, check=True, timeout=5,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
 
             img = Image.open(local_temp)
             pixel = img.getpixel((x, y))
@@ -345,7 +365,8 @@ class AdbController:
             except OSError:
                 pass
             subprocess.run([self.adb_path, '-s', device, 'shell', 'rm', temp_file],
-                           capture_output=True, timeout=3, creationflags=subprocess.CREATE_NO_WINDOW)
+                           capture_output=True, timeout=3,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
             return color_hex
         except Exception as e:
             self._log(f"取色失败 ({x},{y}): {e}", "error")
@@ -356,7 +377,8 @@ class AdbController:
         try:
             cmd = [self.adb_path, '-s', device, 'shell', 'pm', 'list', 'packages',
                    self.ADBKEYBOARD_PACKAGE]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
             return self.ADBKEYBOARD_PACKAGE in result.stdout
         except Exception as e:
             self._log(f"检查ADBKeyboard失败: {e}", "error")
@@ -376,7 +398,8 @@ class AdbController:
         # 方法1: ime set
         try:
             cmd = [self.adb_path, '-s', device, 'shell', 'ime', 'set', self.ADBKEYBOARD_IME]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
             if result.returncode == 0:
                 switch_success = True
             else:
@@ -389,13 +412,15 @@ class AdbController:
             try:
                 subprocess.run(
                     [self.adb_path, '-s', device, 'shell', 'ime', 'enable', self.ADBKEYBOARD_IME],
-                    capture_output=True, timeout=3, creationflags=subprocess.CREATE_NO_WINDOW
+                    capture_output=True, timeout=3,
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 time.sleep(0.2)
                 result = subprocess.run(
                     [self.adb_path, '-s', device, 'shell', 'settings', 'put', 'secure',
                      'default_input_method', self.ADBKEYBOARD_IME],
-                    capture_output=True, text=True, timeout=3, creationflags=subprocess.CREATE_NO_WINDOW
+                    capture_output=True, text=True, timeout=3,
+                    creationflags=subprocess.CREATE_NO_WINDOW
                 )
                 if result.returncode == 0:
                     switch_success = True
@@ -421,7 +446,8 @@ class AdbController:
             b64_text = base64.b64encode(text.encode('utf-8')).decode('utf-8')
             cmd = [self.adb_path, '-s', device, 'shell', 'am', 'broadcast',
                    '-a', 'ADB_INPUT_B64', '--es', 'msg', b64_text]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=5,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
 
             if result.returncode == 0:
                 preview = text[:30] + ("..." if len(text) > 30 else "")
@@ -474,7 +500,8 @@ class AdbController:
         self._log(f"📲 正在安装 ADBKeyboard 到设备 {device}...", "info")
         try:
             cmd = [self.adb_path, '-s', device, 'install', '-r', apk_filename]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout,
+                                    creationflags=subprocess.CREATE_NO_WINDOW)
 
             if result.returncode == 0:
                 self._log("✅ ADBKeyboard 安装成功！", "info")
@@ -490,48 +517,47 @@ class AdbController:
     def capture_and_upload(self, device=None):
         """
         截取设备屏幕并上传到服务器
-        
+
         :param device: 设备序列号，None则使用当前选中的设备
-        :param server_url: 服务器上传地址
         :return: (success, response_text) 或 (False, error_message)
         """
         import requests
-        import os
-        
+
         if device is None:
             device = self.get_selected_device()
             if not device:
                 return False, "未选择设备"
             else:
                 self.log_message(f"选择设备: {device}", "info")
-        
+
         try:
             # 1. 截图保存到本地临时文件
             local_screen = "temp_upload_screen.png"
-            server_url="http://localhost:5000/upload/" + hashlib.md5(device.encode('utf-8')).hexdigest()
+            server_url = "http://localhost:5000/upload/" + hashlib.md5(device.encode('utf-8')).hexdigest()
             # 使用 exec-out 方式截图（更快）
             with open(local_screen, 'wb') as f:
                 cmd = ['adb', '-s', device, 'exec-out', 'screencap', '-p']
-                subprocess.run(cmd, stdout=f, check=True, timeout=15, creationflags=subprocess.CREATE_NO_WINDOW)
-            
+                subprocess.run(cmd, stdout=f, check=True, timeout=15,
+                               creationflags=subprocess.CREATE_NO_WINDOW)
+
             self.log_message(f"截图已保存到: {local_screen}", "info")
-            
+
             # 2. 检查文件是否存在
             if not os.path.exists(local_screen):
                 return False, "截图文件创建失败"
-            
+
             # 3. 上传到服务器
             try:
                 with open(local_screen, 'rb') as f:
                     files = {'image': (local_screen, f, 'image/png')}
                     response = requests.post(server_url, files=files, timeout=30)
-                    
+
                 # 删除临时文件
                 try:
                     os.remove(local_screen)
-                except:
+                except Exception:
                     pass
-                
+
                 if response.status_code == 200:
                     self.log_message(f"图片上传成功: {server_url}", "info")
                     return True, response.text
@@ -539,7 +565,7 @@ class AdbController:
                     error_msg = f"上传失败，状态码: {response.status_code}, 响应: {response.text}"
                     self.log_message(error_msg, "error")
                     return False, error_msg
-                    
+
             except requests.exceptions.ConnectionError:
                 self.log_message(f"无法连接到服务器: {server_url}", "error")
                 return False, "服务器连接失败"
@@ -550,7 +576,7 @@ class AdbController:
                 error_msg = f"上传异常: {e}"
                 self.log_message(error_msg, "error")
                 return False, error_msg
-                
+
         except subprocess.TimeoutExpired:
             self.log_message("截图超时", "error")
             return False, "截图超时"
@@ -558,44 +584,49 @@ class AdbController:
             error_msg = f"截图失败: {e}"
             self.log_message(error_msg, "error")
             return False, error_msg
-            
+
     # ---------------- UI 层文字提取 ----------------
-    def dump_ui_xml(self, device, timeout=10, remote_path="/sdcard/window_dump.xml"):
+    def _get_ui_device(self, device):
+        """按需连接 uiautomator2，同一设备复用连接"""
+        if u2 is None:
+            self._log("未安装 uiautomator2，无法使用 UI 提取功能（pip install uiautomator2）", "error")
+            return None
+        if self._d is None or self._d_serial != device:
+            try:
+                self._d = u2.connect(device)
+                self._d_serial = device
+                self._log(f"uiautomator2 已连接设备: {device}", "info")
+            except Exception as e:
+                self._log(f"uiautomator2 连接失败: {e}", "error")
+                self._d = None
+                self._d_serial = None
+                return None
+        return self._d
+
+    def dump_ui_xml(self, device, timeout=10, remote_path=None):
         """
-        执行 uiautomator dump 并返回 XML 字符串
+        用 uiautomator2 的 dump_hierarchy 获取当前活动窗口的 XML。
+        - 不等待 idle，视频播放/动画界面也能正常抓取
+        - 只包含当前显示界面，不含状态栏
+        - remote_path 参数保留仅为兼容旧调用，已不使用
+
         失败返回 None
         """
-        try:
-            # dump 到设备
-            cmd = [self.adb_path, '-s', device, 'shell', 'uiautomator', 'dump', remote_path]
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
-            if result.returncode != 0:
-                self._log(f"uiautomator dump 失败: {result.stderr.strip()}", "error")
-                return None
-
-            # 直接 exec-out cat 回来（避免 pull 落盘）
-            cmd = [self.adb_path, '-s', device, 'exec-out', 'cat', remote_path]
-            result = subprocess.run(cmd, capture_output=True, timeout=timeout, creationflags=subprocess.CREATE_NO_WINDOW)
-            if result.returncode != 0 or not result.stdout:
-                self._log("读取 XML 失败", "error")
-                return None
-
-            # 清理设备端临时文件（失败无所谓）
-            try:
-                subprocess.run(
-                    [self.adb_path, '-s', device, 'shell', 'rm', '-f', remote_path],
-                    capture_output=True, timeout=3, creationflags=subprocess.CREATE_NO_WINDOW
-                )
-            except Exception:
-                pass
-
-            return result.stdout.decode('utf-8', errors='replace')
-
-        except subprocess.TimeoutExpired:
-            self._log("uiautomator dump 超时（界面可能在动）", "error")
+        d = self._get_ui_device(device)
+        if d is None:
             return None
+
+        try:
+            xml = d.dump_hierarchy()
+            if not xml or len(xml) < 100:
+                self._log("dump 返回内容过少，可能界面异常或服务未就绪", "warning")
+                return None
+            return xml
         except Exception as e:
-            self._log(f"uiautomator dump 异常: {e}", "error")
+            self._log(f"uiautomator2 dump 失败: {e}", "error")
+            # 出错后清空连接，下次重连
+            self._d = None
+            self._d_serial = None
             return None
 
     def get_screen_texts(self, device, include_desc=True):

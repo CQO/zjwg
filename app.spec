@@ -1,12 +1,24 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
+import uiautomator2
+
+U2_ASSETS = os.path.join(os.path.dirname(uiautomator2.__file__), "assets")
+
 
 a = Analysis(
     ['app.py'],
     pathex=[],
     binaries=[],
-    datas=[],
-    hiddenimports=[],
+    datas=[
+        (U2_ASSETS, 'uiautomator2/assets'),
+    ],
+    hiddenimports=[
+        'uiautomator2',
+        'uiautomator2.assets',
+        'adbutils',
+        'logzero',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
