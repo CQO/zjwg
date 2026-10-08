@@ -8,6 +8,8 @@ import re
 import json
 import sys
 import io
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse, unquote
 from PIL import Image, ImageGrab, ImageTk
 
 # ===== 拆分出去的模块 =====
@@ -17,10 +19,18 @@ from task.task_manager import TaskManager
 from ui.phone_control import PhoneControlWindow
 
 
+
+# 图标修改
+def resource_path(rel):
+    """兼容 PyInstaller 单文件模式的资源路径"""
+    base = getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, rel)
+
+
 class ADBGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title("ADB 模拟器自动化控制")
+        self.root.title("手机自动化控制程序")
         self.root.geometry("1150x750")
         self.root.resizable(True, True)
 
@@ -51,6 +61,13 @@ class ADBGUI:
         # 变量
         self.devices = []
         self.selected_device = tk.StringVar()
+
+        # API 服务
+        self.api_server = None
+        self.api_thread = None
+        self.api_running = False
+        self.api_port_var = tk.StringVar(value=str(self.settings_mgr.get_value("api_port", 8765)))
+        self.api_enabled_var = tk.BooleanVar(value=False)
 
         # 创建界面
         self.create_widgets()
@@ -228,16 +245,16 @@ class ADBGUI:
         self.create_task_tab()
 
         self.settings_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.settings_tab, text="设置管理")
+        self.notebook.add(self.settings_tab, text="配置信息")
         self.create_settings_tab()
-
-        self.test_tab = ttk.Frame(self.notebook)
-        self.notebook.add(self.test_tab, text="功能测试")
-        self.create_test_tab()
 
         self.quick_tab = ttk.Frame(self.notebook)
         self.notebook.add(self.quick_tab, text="快捷功能")
         self.create_quick_tab()
+
+        self.test_tab = ttk.Frame(self.notebook)
+        self.notebook.add(self.test_tab, text="辅助功能")
+        self.create_test_tab()
 
         log_frame = ttk.LabelFrame(main_frame, text="执行日志", padding=5)
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(5, 0))
@@ -883,6 +900,154 @@ class ADBGUI:
         ttk.Button(text_btn_frame, text="使用说明",
                    command=self.show_adbkeyboard_help, width=12).pack(side=tk.LEFT, padx=5)
 
+        api_frame = ttk.LabelFrame(self.test_tab, text="API 调用服务", padding=10)
+        api_frame.pack(fill=tk.X, pady=5, padx=5)
+
+        api_row1 = ttk.Frame(api_frame)
+        api_row1.pack(fill=tk.X, pady=5)
+
+        ttk.Label(api_row1, text="监听端口:").pack(side=tk.LEFT, padx=5)
+        self.api_port_entry = ttk.Entry(api_row1, textvariable=self.api_port_var, width=8)
+        self.api_port_entry.pack(side=tk.LEFT, padx=5)
+
+        self.api_toggle_btn = ttk.Button(
+            api_row1, text="启动 API 服务",
+            command=self.toggle_api_server, width=18)
+        self.api_toggle_btn.pack(side=tk.LEFT, padx=10)
+
+        self.api_status_label = ttk.Label(api_row1, text="⏹ 已停止", foreground="red")
+        self.api_status_label.pack(side=tk.LEFT, padx=10)
+
+        tip = (
+            "GET http://127.0.0.1:<端口>/run/<功能名>   → 执行一次该功能\n"
+            "GET http://127.0.0.1:<端口>/list           → 列出所有可调用功能"
+        )
+        ttk.Label(api_frame, text=tip, foreground="gray", justify=tk.LEFT).pack(anchor=tk.W, pady=(0, 5))
+
+    # ==================================================================
+    #  HTTP API 服务
+    # ==================================================================
+    def start_api_server(self):
+        if self.api_running:
+            self.log_message("API 服务已在运行", "warning")
+            return False
+
+        try:
+            port = int(self.api_port_var.get())
+            if not (1 <= port <= 65535):
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("错误", "端口号必须是 1~65535 之间的整数")
+            return False
+
+        app_ref = self  # 闭包引用
+
+        class ApiHandler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                # 用我们自己的日志，屏蔽默认 stderr 输出
+                app_ref.log_message("API: " + (fmt % args), "info")
+
+            def _send(self, code, body):
+                data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                parsed = urlparse(self.path)
+                path = unquote(parsed.path)
+                parts = [p for p in path.split("/") if p]
+
+                # 健康检查
+                if path == "/":
+                    self._send(200, {"ok": True, "msg": "ADB API running"})
+                    return
+
+                # /run/<功能名>
+                if len(parts) == 2 and parts[0] == "run":
+                    func_name = parts[1]
+                    if not hasattr(app_ref, func_name):
+                        self._send(404, {
+                            "ok": False,
+                            "error": f"功能 '{func_name}' 不存在",
+                        })
+                        return
+                    try:
+                        device = app_ref.selected_device.get()
+                        if not device:
+                            self._send(400, {"ok": False, "error": "未选择设备"})
+                            return
+
+                        app_ref.log_message(f"API 调用功能: {func_name}", "info")
+                        # 在线程里跑，避免阻塞
+                        threading.Thread(
+                            target=lambda: getattr(app_ref, func_name)(),
+                            daemon=True,
+                        ).start()
+                        self._send(200, {"ok": True, "func": func_name})
+                    except Exception as e:
+                        self._send(500, {"ok": False, "error": str(e)})
+                    return
+
+                # /list 列出所有可调用功能
+                if path == "/list":
+                    funcs = []
+                    for name in app_ref.function_configs.keys():
+                        if hasattr(app_ref, name):
+                            funcs.append(name)
+                    self._send(200, {"ok": True, "functions": funcs})
+                    return
+
+                self._send(404, {"ok": False, "error": "未知路径"})
+
+        try:
+            self.api_server = ThreadingHTTPServer(("0.0.0.0", port), ApiHandler)
+        except OSError as e:
+            messagebox.showerror("错误", f"无法监听端口 {port}: {e}")
+            return False
+
+        self.api_running = True
+        self.api_thread = threading.Thread(target=self.api_server.serve_forever, daemon=True)
+        self.api_thread.start()
+
+        self.settings_mgr.set_value("api_port", port)
+        self.api_enabled_var.set(True)
+        self.api_status_label.config(text=f"✅ 运行中 (端口 {port})", foreground="green")
+        self.api_toggle_btn.config(text="关闭 API 服务")
+        self.log_message(f"API 服务已启动: http://127.0.0.1:{port}/run/<功能名>", "info")
+        return True
+
+    def stop_api_server(self):
+        if not self.api_running:
+            return
+        try:
+            self.api_server.shutdown()
+            self.api_server.server_close()
+        except Exception as e:
+            self.log_message(f"关闭 API 服务异常: {e}", "warning")
+        self.api_server = None
+        self.api_thread = None
+        self.api_running = False
+        self.api_enabled_var.set(False)
+        self.api_status_label.config(text="⏹ 已停止", foreground="red")
+        self.api_toggle_btn.config(text="启动 API 服务")
+        self.log_message("API 服务已停止", "info")
+
+    def toggle_api_server(self):
+        if self.api_running:
+            self.stop_api_server()
+        else:
+            self.start_api_server()
+
+    def on_close(self):
+        try:
+            self.stop_api_server()
+        except Exception:
+            pass
+        self.root.destroy()
     def open_phone_control_window(self):
         device = self.get_selected_device()
         if not device:
@@ -1197,5 +1362,10 @@ class ADBGUI:
 
 if __name__ == "__main__":
     root = tk.Tk()
+    try:
+        root.iconbitmap(resource_path("app.ico"))
+    except Exception as e:
+        print("设置窗口图标失败:", e)
     app = ADBGUI(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()

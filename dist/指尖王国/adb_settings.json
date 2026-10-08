@@ -1,0 +1,28 @@
+{
+  "click_delay": 0.5,
+  "retry_times": 3,
+  "image_threshold": 0.8,
+  "default_x": 100,
+  "default_y": 100,
+  "派出兵力": 5000,
+  "搜索点坐标X": "3222@3260@3264@3255",
+  "搜索点坐标Y": "3495@3500@3535@3555",
+  "task_queue": [
+    {
+      "name": "退出联盟",
+      "times": 1,
+      "interval": 1.0
+    },
+    {
+      "name": "加入联盟",
+      "times": 1,
+      "interval": 1.0
+    },
+    {
+      "name": "叛乱任务",
+      "times": 1,
+      "interval": 1.0
+    }
+  ],
+  "加入联盟顺序": "左上1@左上2@左上3"
+}

@@ -12,6 +12,7 @@ a = Analysis(
     binaries=[],
     datas=[
         (U2_ASSETS, 'uiautomator2/assets'),
+        ('app.ico', '.'),
     ],
     hiddenimports=[
         'uiautomator2',
@@ -34,7 +35,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='app',
+    name='运行程序',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -47,5 +48,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['C:\\Users\\mail\\Documents\\PUGE\\设计文件\\8h7mr-6xq6z-001.ico'],
+    icon=['app.ico'],
 )
